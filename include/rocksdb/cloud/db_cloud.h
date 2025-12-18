@@ -48,6 +48,9 @@ class DBCloud : public StackableDB {
   // destination cloud storage.
   virtual Status Savepoint() = 0;
 
+  // Sync local clone state with the cloud manifest.
+  virtual Status Resync() = 0;
+
   // Synchronously copy all local files to the cloud destination given by
   // 'destination' parameter.
   // Important: This will overwrite the database in 'destination', if any.

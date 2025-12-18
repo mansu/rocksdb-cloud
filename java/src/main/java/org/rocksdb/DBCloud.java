@@ -159,6 +159,16 @@ public class DBCloud extends RocksDB {
   }
 
   /**
+   * Resync local clone state with the cloud manifest.
+   * This is intended for ephemeral clones (no destination bucket).
+   *
+   * @throws RocksDBException on error.
+   */
+  public void resync() throws RocksDBException {
+    resync(nativeHandle_);
+  }
+
+  /**
    * List column families for a cloud database.
    *
    * @param dbOptions database options (must include a cloud-aware Env).
@@ -187,6 +197,9 @@ public class DBCloud extends RocksDB {
       boolean readOnly) throws RocksDBException;
 
   private static native void savepoint(long nativeHandle)
+      throws RocksDBException;
+
+  private static native void resync(long nativeHandle)
       throws RocksDBException;
 
   private static native byte[][] listColumnFamilies(long dbOptionsHandle,

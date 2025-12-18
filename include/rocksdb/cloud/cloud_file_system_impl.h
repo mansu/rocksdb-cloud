@@ -342,8 +342,6 @@ class CloudFileSystemImpl : public CloudFileSystem {
   IOStatus GetCloudDbid(const std::string& local_dir, std::string* src_dbid,
                         std::string* dest_dbid);
 
-  IOStatus ResyncDir(const std::string& local_dir);
-
   IOStatus CreateNewIdentityFile(const std::string& dbid,
                                  const std::string& local_name);
 
@@ -375,6 +373,8 @@ class CloudFileSystemImpl : public CloudFileSystem {
       const std::vector<std::string>& active_cookies) override;
 
  public:
+  IOStatus ResyncDir(const std::string& local_dir);
+
   // returns the options used to create this object
   const CloudFileSystemOptions& GetCloudFileSystemOptions() const override {
     return cloud_fs_options;

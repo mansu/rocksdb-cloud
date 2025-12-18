@@ -1384,7 +1384,14 @@ IOStatus CloudFileSystemImpl::ResyncDir(const std::string& local_dir) {
         local_dir.c_str(), src_bucket.c_str(), dest_bucket.c_str());
     return IOStatus::InvalidArgument();
   }
-  return IOStatus::OK();
+  auto& cloud_opts =
+      *const_cast<CloudFileSystemOptions*>(&GetCloudFileSystemOptions());
+  const bool old_roll_cloud_manifest_on_open =
+      cloud_opts.roll_cloud_manifest_on_open;
+  cloud_opts.roll_cloud_manifest_on_open = false;
+  auto st = LoadCloudManifest(local_dir, true);
+  cloud_opts.roll_cloud_manifest_on_open = old_roll_cloud_manifest_on_open;
+  return st;
 }
 
 //

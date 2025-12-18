@@ -271,6 +271,19 @@ void Java_org_rocksdb_DBCloud_savepoint(JNIEnv* env, jclass, jlong jdb_handle) {
 
 /*
  * Class:     org_rocksdb_DBCloud
+ * Method:    resync
+ * Signature: (J)V
+ */
+void Java_org_rocksdb_DBCloud_resync(JNIEnv* env, jclass, jlong jdb_handle) {
+  auto* db = reinterpret_cast<ROCKSDB_NAMESPACE::DBCloud*>(jdb_handle);
+  auto s = db->Resync();
+  if (!s.ok()) {
+    ROCKSDB_NAMESPACE::RocksDBExceptionJni::ThrowNew(env, s);
+  }
+}
+
+/*
+ * Class:     org_rocksdb_DBCloud
  * Method:    listColumnFamilies
  * Signature: (JLjava/lang/String;)[[B
  */

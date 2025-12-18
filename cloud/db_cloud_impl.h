@@ -25,6 +25,7 @@ class DBCloudImpl : public DBCloud {
  public:
   virtual ~DBCloudImpl();
   Status Savepoint() override;
+  Status Resync() override;
 
   Status CheckpointToCloud(const BucketOptions& destination,
                            const CheckpointToCloudOptions& options) override;

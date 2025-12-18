@@ -230,6 +230,13 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   return st;
 }
 
+Status DBCloudImpl::Resync() {
+  auto* cfs =
+      dynamic_cast<CloudFileSystemImpl*>(GetEnv()->GetFileSystem().get());
+  assert(cfs);
+  return cfs->ResyncDir(GetName());
+}
+
 Status DBCloudImpl::Savepoint() {
   std::string dbid;
   Options default_options = GetOptions();
