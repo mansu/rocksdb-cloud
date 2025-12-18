@@ -30,13 +30,23 @@ jlong Java_org_rocksdb_Env_getDefaultEnvInternal(JNIEnv*, jclass) {
 
 /*
  * Class:     org_rocksdb_RocksEnv
- * Method:    disposeInternal
+ * Method:    disposeInternalJni
  * Signature: (J)V
  */
-void Java_org_rocksdb_RocksEnv_disposeInternal(JNIEnv*, jclass, jlong jhandle) {
+void Java_org_rocksdb_RocksEnv_disposeInternalJni(JNIEnv*, jclass,
+                                                  jlong jhandle) {
   auto* e = reinterpret_cast<ROCKSDB_NAMESPACE::Env*>(jhandle);
   assert(e != nullptr);
   delete e;
+}
+
+/*
+ * Backward-compatibility alias for older Java artifacts that declared
+ * `disposeInternal(long)` instead of `disposeInternalJni(long)`.
+ */
+void Java_org_rocksdb_RocksEnv_disposeInternal(JNIEnv* env, jclass clazz,
+                                               jlong jhandle) {
+  Java_org_rocksdb_RocksEnv_disposeInternalJni(env, clazz, jhandle);
 }
 
 /*
