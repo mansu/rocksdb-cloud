@@ -77,6 +77,8 @@ ENV AWS_SDK=/opt/aws-sdk AWS_CRT=/opt/aws-sdk \
     JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV CC="ccache gcc" CXX="ccache g++"
 RUN --mount=type=cache,target=/root/.cache/ccache \
+    --mount=type=cache,target=/root/.m2,sharing=locked \
+    --mount=type=cache,target=/src/rocksdb-cloud/java/test-libs,sharing=locked \
     USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" rocksdbjava && \
     cd java && JAVA_HOME=$JAVA_HOME make sample
 
