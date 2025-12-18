@@ -2310,8 +2310,7 @@ JAR_CMD := jar
 endif
 endif
 rocksdbjavastatic_javalib:
-	# Only compile main Java sources; avoid pulling test dependencies (network).
-	cd java; $(MAKE) java
+	cd java; $(MAKE) javalib
 	rm -f java/target/$(ROCKSDBJNILIB)
 	$(CXX) $(CXXFLAGS) -I./java/. $(JAVA_INCLUDE) -shared -fPIC \
 	  -o ./java/target/$(ROCKSDBJNILIB) $(ALL_JNI_NATIVE_SOURCES) \
@@ -2429,8 +2428,7 @@ rocksdbjava: $(LIB_OBJECTS)
 ifeq ($(JAVA_HOME),)
 	$(error JAVA_HOME is not set)
 endif
-	# Only compile main Java sources; avoid pulling test dependencies (network).
-	$(AM_V_GEN)cd java; $(MAKE) java;
+	$(AM_V_GEN)cd java; $(MAKE) javalib;
 	$(AM_V_at)rm -f ./java/target/$(ROCKSDBJNILIB)
 	$(AM_V_at)$(CXX) $(CXXFLAGS) -I./java/. -I./java/rocksjni $(JAVA_INCLUDE) $(ROCKSDB_PLUGIN_JNI_CXX_INCLUDEFLAGS) -shared -fPIC -o ./java/target/$(ROCKSDBJNILIB) $(ALL_JNI_NATIVE_SOURCES) $(LIB_OBJECTS) $(JAVA_LDFLAGS) $(COVERAGEFLAGS)
 	$(AM_V_at)cd java; $(JAR_CMD) -cf target/$(ROCKSDB_JAR) HISTORY*.md
