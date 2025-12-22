@@ -1,11 +1,10 @@
 # ---- Builder ----
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
-RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake git pkg-config ccache perl wget ca-certificates \
   libbz2-dev zlib1g-dev libzstd-dev liblz4-dev libsnappy-dev libgflags-dev \
-  openjdk-17-jdk && rm -rf /var/lib/apt/lists/*
+  openjdk-21-jdk-headless gcc-11 g++-11 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/src
 
@@ -74,20 +73,17 @@ COPY . .
 ENV AWS_SDK=/opt/aws-sdk AWS_CRT=/opt/aws-sdk \
     LD_LIBRARY_PATH=/opt/openssl11/lib:/opt/aws-sdk/lib:/opt/aws-sdk/lib64 \
     TMPDIR=/tmp \
-    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-ENV CC="ccache gcc" CXX="ccache g++"
-RUN --mount=type=cache,target=/root/.cache/ccache \
-    --mount=type=cache,target=/root/.m2,sharing=locked \
-    --mount=type=cache,target=/src/rocksdb-cloud/java/test-libs,sharing=locked \
-    USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" rocksdbjava && \
+    JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENV CC="ccache /usr/bin/gcc-11" CXX="ccache /usr/bin/g++-11" CCACHE_COMPILERCHECK=content CCACHE_DIR=/root/.cache/ccache-gcc11
+RUN make clean && make jclean
+RUN USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" rocksdbjava && \
     cd java && JAVA_HOME=$JAVA_HOME make sample
 
 # ---- Runtime ----
 FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
-RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  apt-get update && apt-get install -y --no-install-recommends \
-  openjdk-17-jre libzstd1 liblz4-1 libsnappy1v5 libbz2-1.0 && \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  openjdk-21-jre-headless libzstd1 liblz4-1 libsnappy1v5 libbz2-1.0 && \
   rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/openssl11 /opt/openssl11
