@@ -1012,6 +1012,7 @@ IOStatus S3StorageProvider::DoPutCloudObject(const std::string& local_file,
                                              const std::string& object_path,
                                              uint64_t file_size,
                                              const PutObjectOptions& /*options*/) {
+  auto start_time = std::chrono::steady_clock::now();
   if (s3client_->HasTransferManager()) {
     auto handle = s3client_->UploadFile(ToAwsString(bucket_name),
                                         ToAwsString(object_path),
@@ -1045,9 +1046,22 @@ IOStatus S3StorageProvider::DoPutCloudObject(const std::string& local_file,
       return IOStatus::IOError(local_file, errmsg);
     }
   }
+  auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - start_time)
+                        .count();
+  double mbps = 0.0;
+  if (elapsed_us > 0) {
+    mbps = (static_cast<double>(file_size) / (1024.0 * 1024.0)) /
+           (static_cast<double>(elapsed_us) / 1000000.0);
+  }
+  const std::string local_name = basename(local_file);
+  const std::string object_name = basename(object_path);
   Log(InfoLogLevel::INFO_LEVEL, cfs_->GetLogger(),
-      "[s3] PutCloudObject %s/%s, size %" PRIu64 ", OK", bucket_name.c_str(),
-      object_path.c_str(), file_size);
+      "[s3] PutCloudObject %s/%s, size %" PRIu64 ", OK, duration_us %" PRIu64
+      ", mbps %.2f, local_file %s, object %s",
+      bucket_name.c_str(), object_path.c_str(), file_size,
+      static_cast<uint64_t>(elapsed_us), mbps, local_name.c_str(),
+      object_name.c_str());
   return IOStatus::OK();
 }
 
