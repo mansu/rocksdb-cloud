@@ -54,6 +54,20 @@ To run necessary tests, use `run_tests.sh` script
 - Once the jar is present, run `make install-prebuilt-rocksdb` (or `make jni` if you prefer to build/install directly into `~/.m2`).
 - Then build the POC: `make build` or `mvn -pl rocksdb-sync-poc clean package`.
 
+## Build the JNI image (Docker)
+- Build the image (defaults to your Docker host platform):
+  `make docker-build`
+- To force a specific architecture (example amd64):
+  `DOCKER_BUILDKIT=1 docker buildx build --platform=linux/amd64 -t rocksdb-cloud:latest .`
+
+### JNI artifacts inside the image
+The Docker build copies JNI outputs into these paths:
+- `/usr/lib/librocksdbjni-*.so`
+- `/usr/share/java/rocksdbjni-*.jar`
+
+You can list them with:
+`docker run --rm rocksdb-cloud:latest ls -1 /usr/lib/librocksdbjni-*.so /usr/share/java/rocksdbjni-*.jar`
+
 ### Native dependencies (macOS Homebrew)
 - AWS support (S3/Kinesis): `brew install aws-sdk-cpp aws-crt-cpp`
 - Kafka/WAL streaming: `brew install librdkafka`
