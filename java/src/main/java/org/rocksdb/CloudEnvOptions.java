@@ -23,6 +23,7 @@ public class CloudEnvOptions {
   private boolean keepLocalLogFiles = true;
   private boolean resyncOnOpen = false;
   private boolean rollManifestOnOpen = true;
+  private boolean useAwsTransferManager = false;
   private String cookieOnOpen = "";
   private String newCookieOnOpen = "";
   private boolean createBucketIfMissing = true;
@@ -103,6 +104,11 @@ public class CloudEnvOptions {
     return this;
   }
 
+  public CloudEnvOptions setUseAwsTransferManager(final boolean useAwsTransferManager) {
+    this.useAwsTransferManager = useAwsTransferManager;
+    return this;
+  }
+
   public CloudEnvOptions setCookieOnOpen(final String cookieOnOpen) {
     this.cookieOnOpen = cookieOnOpen;
     return this;
@@ -152,6 +158,7 @@ public class CloudEnvOptions {
     append(sb, "keep_local_log_files", keepLocalLogFiles);
     append(sb, "resync_on_open", resyncOnOpen);
     append(sb, "roll_cloud_manifest_on_open", rollManifestOnOpen);
+    append(sb, "use_aws_transfer_manager", useAwsTransferManager);
     append(sb, "cookie_on_open", cookieOnOpen);
     append(sb, "new_cookie_on_open", newCookieOnOpen);
     append(sb, "create_bucket_if_missing", createBucketIfMissing);
@@ -272,6 +279,11 @@ public class CloudEnvOptions {
 
     public Builder setResyncOnOpen(final boolean resyncOnOpen) {
       opts.setResyncOnOpen(resyncOnOpen);
+      return this;
+    }
+
+    public Builder setUseAwsTransferManager(final boolean useAwsTransferManager) {
+      opts.setUseAwsTransferManager(useAwsTransferManager);
       return this;
     }
 
