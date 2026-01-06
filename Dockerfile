@@ -4,42 +4,17 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake git pkg-config perl wget ca-certificates \
   libbz2-dev zlib1g-dev libzstd-dev liblz4-dev libsnappy-dev libgflags-dev \
+  libssl-dev libcurl4-openssl-dev \
   gcc-11 g++-11 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/src
 
-# Build OpenSSL 1.1 and curl against it to avoid libssl conflicts.
-RUN wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz && \
-    tar xzf openssl-1.1.1w.tar.gz && \
-    cd openssl-1.1.1w && \
-    ./config --prefix=/opt/openssl11 --openssldir=/opt/openssl11 shared && \
-    make -j"$(nproc)" && \
-    make install_sw && \
-    cd /opt/src && rm -rf openssl-1.1.1w openssl-1.1.1w.tar.gz
-
-RUN wget -q https://curl.se/download/curl-8.11.1.tar.gz && \
-    tar xzf curl-8.11.1.tar.gz && \
-    cd curl-8.11.1 && \
-    LDFLAGS="-Wl,-rpath,/opt/openssl11/lib" ./configure --with-ssl=/opt/openssl11 --prefix=/opt/curl11 --with-ca-path=/etc/ssl/certs --without-libpsl && \
-    make -j"$(nproc)" && \
-    make install && \
-    cd /opt/src && rm -rf curl-8.11.1 curl-8.11.1.tar.gz
-
-ENV PATH="/opt/curl11/bin:${PATH}"
-ENV PKG_CONFIG_PATH="/opt/curl11/lib/pkgconfig:/opt/openssl11/lib/pkgconfig"
-ENV LIBRARY_PATH="/opt/curl11/lib:/opt/openssl11/lib"
-ENV LDFLAGS="-L/opt/curl11/lib -Wl,-rpath,/opt/curl11/lib -L/opt/openssl11/lib -Wl,-rpath,/opt/openssl11/lib"
-ENV CPPFLAGS="-I/opt/curl11/include -I/opt/openssl11/include"
-RUN echo "/opt/openssl11/lib" > /etc/ld.so.conf.d/openssl11.conf && \
-    echo "/opt/curl11/lib" > /etc/ld.so.conf.d/curl11.conf && \
-    ldconfig
-
-# Build AWS C libraries + CRT + SDK against the pinned OpenSSL/curl.
+# Build AWS C libraries + CRT + SDK against system OpenSSL/curl.
 RUN git clone --depth 1 https://github.com/awslabs/aws-c-common.git && \
     cmake -S aws-c-common -B acc-build \
       -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_DEPS=OFF -DCRYPTO_BACKEND=openssl \
-      -DOPENSSL_ROOT_DIR=/opt/openssl11 -DCMAKE_PREFIX_PATH="/opt/openssl11;/opt/curl11;/usr" \
+      -DCMAKE_PREFIX_PATH="/usr" \
       -DCMAKE_INSTALL_PREFIX=/opt/aws-sdk && \
     cmake --build acc-build --target install -j"$(nproc)"
 
@@ -49,7 +24,7 @@ RUN cmake -S aws-crt-cpp -B crt-build \
       -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_DEPS=ON -DLEGACY_BUILD=ON \
       -DCRYPTO_BACKEND=openssl -DUSE_OPENSSL=ON -DAWS_LC_USE_OPENSSL=1 \
-      -DOPENSSL_ROOT_DIR=/opt/openssl11 -DCMAKE_PREFIX_PATH="/opt/aws-sdk;/opt/openssl11;/opt/curl11;/usr" \
+      -DCMAKE_PREFIX_PATH="/opt/aws-sdk;/usr" \
       -DCMAKE_INSTALL_PREFIX=/opt/aws-sdk && \
       cmake --build crt-build --target install -j"$(nproc)"
 
@@ -60,53 +35,38 @@ RUN cmake -S aws-sdk-cpp -B sdk-build \
       -DBUILD_ONLY="s3;kinesis;transfer;core" \
       -DBUILD_DEPS=ON -DENABLE_TESTING=OFF -DBUILD_TESTING=OFF \
       -DCRYPTO_BACKEND=openssl \
-      -DOPENSSL_ROOT_DIR=/opt/openssl11 \
-      -DCMAKE_PREFIX_PATH="/opt/aws-sdk;/opt/openssl11;/opt/curl11" \
+      -DCMAKE_PREFIX_PATH="/opt/aws-sdk;/usr" \
       -DCMAKE_INSTALL_PREFIX=/opt/aws-sdk \
       -DCMAKE_C_FLAGS="-Wno-error -DOPENSSL_SUPPRESS_DEPRECATED=1" \
       -DCMAKE_CXX_FLAGS="-Wno-error -Wno-error=deprecated-declarations -Wno-error=maybe-uninitialized -DOPENSSL_SUPPRESS_DEPRECATED=1" && \
       cmake --build sdk-build --target install -j"$(nproc)"
 
-RUN rm -f /opt/aws-sdk/lib/libcrypto.so* /opt/aws-sdk/lib/libssl.so* /opt/aws-sdk/lib64/libcrypto.so* /opt/aws-sdk/lib64/libssl.so*
-
 # ---- Builder (RocksDB build + Java artifacts) ----
 FROM ubuntu:24.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  build-essential cmake git pkg-config ccache perl wget ca-certificates \
+  build-essential cmake git pkg-config ccache perl wget ca-certificates curl \
   libbz2-dev zlib1g-dev libzstd-dev liblz4-dev libsnappy-dev libgflags-dev \
+  libssl-dev libcurl4-openssl-dev \
   openjdk-21-jdk gcc-11 g++-11 && rm -rf /var/lib/apt/lists/*
 
-COPY --from=deps /opt/openssl11 /opt/openssl11
-COPY --from=deps /opt/curl11 /opt/curl11
 COPY --from=deps /opt/aws-sdk /opt/aws-sdk
-
-ENV PATH="/opt/curl11/bin:${PATH}"
-ENV PKG_CONFIG_PATH="/opt/curl11/lib/pkgconfig:/opt/openssl11/lib/pkgconfig"
-ENV LIBRARY_PATH="/opt/curl11/lib:/opt/openssl11/lib"
-ENV LDFLAGS="-L/opt/curl11/lib -Wl,-rpath,/opt/curl11/lib -L/opt/openssl11/lib -Wl,-rpath,/opt/openssl11/lib"
-ENV CPPFLAGS="-I/opt/curl11/include -I/opt/openssl11/include"
-RUN echo "/opt/openssl11/lib" > /etc/ld.so.conf.d/openssl11.conf && \
-    echo "/opt/curl11/lib" > /etc/ld.so.conf.d/curl11.conf && \
-    ldconfig
 
 WORKDIR /src/rocksdb-cloud
 COPY . .
 ENV AWS_SDK=/opt/aws-sdk AWS_CRT=/opt/aws-sdk \
-    LD_LIBRARY_PATH=/opt/openssl11/lib:/opt/aws-sdk/lib:/opt/aws-sdk/lib64 \
+    LD_LIBRARY_PATH=/opt/aws-sdk/lib:/opt/aws-sdk/lib64 \
     TMPDIR=/tmp \
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 # Fail early if the JDK is not present; record the resolved JAVA_HOME.
-RUN if [ -x "$JAVA_HOME/bin/javac" ]; then \
-      RESOLVED_JAVA_HOME="$JAVA_HOME"; \
-    else \
-      RESOLVED_JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"; \
-    fi && \
-    test -x "$RESOLVED_JAVA_HOME/bin/javac" && \
-    "$RESOLVED_JAVA_HOME/bin/javac" -version && \
-    "$RESOLVED_JAVA_HOME/bin/java" -version && \
-    echo "$RESOLVED_JAVA_HOME" > /etc/java_home
-ENV CC="ccache /usr/bin/gcc-11" CXX="ccache /usr/bin/g++-11" CCACHE_COMPILERCHECK=content CCACHE_DIR=/root/.cache/ccache-gcc11
+RUN test -x "$JAVA_HOME/bin/javac" && \
+    "$JAVA_HOME/bin/javac" -version && \
+    "$JAVA_HOME/bin/java" -version && \
+    echo "$JAVA_HOME" > /etc/java_home
+ENV CC="ccache /usr/bin/gcc-11" CXX="ccache /usr/bin/g++-11" \
+    CCACHE_COMPILERCHECK=content CCACHE_DIR=/tmp/ccache-gcc11 \
+    CCACHE_BASEDIR=/src/rocksdb-cloud CCACHE_NOHASHDIR=1
+RUN mkdir -p /tmp/ccache-gcc11
 RUN make clean && make jclean
 RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" rocksdbjava && \
     cd java && JAVA_HOME="$(cat /etc/java_home)" make sample
@@ -115,15 +75,14 @@ RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" roc
 FROM ubuntu:24.04
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  openjdk-21-jre-headless libzstd1 liblz4-1 libsnappy1v5 libbz2-1.0 && \
+  openjdk-21-jre-headless libzstd1 liblz4-1 libsnappy1v5 libbz2-1.0 \
+  libssl3 libcurl4 && \
   rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /opt/openssl11 /opt/openssl11
-COPY --from=builder /opt/curl11 /opt/curl11
 COPY --from=builder /opt/aws-sdk /opt/aws-sdk
 COPY --from=builder /src/rocksdb-cloud/java/target/librocksdbjni-*.so /usr/lib/
 COPY --from=builder /src/rocksdb-cloud/java/target/rocksdbjni-*.jar /usr/share/java/
 
-ENV LD_LIBRARY_PATH=/opt/openssl11/lib:/opt/curl11/lib:/opt/aws-sdk/lib:/opt/aws-sdk/lib64
+ENV LD_LIBRARY_PATH=/opt/aws-sdk/lib:/opt/aws-sdk/lib64
 ENV TMPDIR=/tmp
 CMD ["/bin/bash"]
