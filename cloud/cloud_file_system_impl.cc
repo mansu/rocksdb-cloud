@@ -2598,7 +2598,21 @@ IOStatus CloudFileSystemImpl::UploadCloudManifest(
 
 IOStatus CloudFileSystemImpl::ApplyCloudManifestDelta(
     const CloudManifestDelta& delta, bool* delta_applied) {
+  std::string old_epoch = cloud_manifest_->GetCurrentEpoch();
   *delta_applied = cloud_manifest_->AddEpoch(delta.file_num, delta.epoch);
+  if (*delta_applied && lifecycle_logger_) {
+    lifecycle_logger_->LogEvent("manifest_epoch_advanced",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("old_epoch", old_epoch);
+                                  w->AddString("new_epoch", delta.epoch);
+                                  w->AddUint64("new_epoch_start_file_num",
+                                               delta.file_num);
+                                  if (delta.file_num > 0) {
+                                    w->AddUint64("prev_epoch_last_file_num",
+                                                 delta.file_num - 1);
+                                  }
+                                });
+  }
   return IOStatus::OK();
 }
 
@@ -2645,6 +2659,24 @@ IOStatus CloudFileSystemImpl::RollNewCookie(
                           MakeCloudManifestFile(local_dbname, cookie));
   if (!st.ok()) {
     return st;
+  }
+  if (lifecycle_logger_) {
+    lifecycle_logger_->LogEvent("cloudmanifest_written",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("cookie", cookie);
+                                  w->AddString("old_epoch", old_epoch);
+                                  w->AddString("new_epoch", delta.epoch);
+                                  w->AddUint64("new_epoch_start_file_num",
+                                               delta.file_num);
+                                  if (delta.file_num > 0) {
+                                    w->AddUint64("prev_epoch_last_file_num",
+                                                 delta.file_num - 1);
+                                  }
+                                  w->AddString(
+                                      "local_file",
+                                      MakeCloudManifestFile(local_dbname,
+                                                            cookie));
+                                });
   }
 
   if (HasDestBucket()) {
