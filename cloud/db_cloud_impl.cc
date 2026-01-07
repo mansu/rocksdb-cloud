@@ -7,6 +7,9 @@
 
 #include "cloud/cloud_manifest.h"
 #include "cloud/filename.h"
+#include "cloud/file_lifecycle_listener.h"
+#include "cloud/file_lifecycle_logger.h"
+#include "cloud/file_lifecycle_tracker.h"
 #include "cloud/manifest_reader.h"
 #include "env/composite_env_wrapper.h"
 #include "file/file_util.h"
@@ -52,12 +55,31 @@ class ConstantSizeSstFileManager : public SstFileManagerImpl {
  private:
   const int64_t constant_file_size_;
 };
+
+std::string DefaultLifecycleLogPath(const DBOptions& options,
+                                    const std::string& local_dbname) {
+  std::string base_dir =
+      options.db_log_dir.empty() ? local_dbname : options.db_log_dir;
+  return base_dir + "/file_lifecycle.jsonl";
+}
 }  // namespace
 
-DBCloudImpl::DBCloudImpl(DB* db, std::unique_ptr<Env> local_env)
-    : DBCloud(db), cfs_(nullptr), local_env_(std::move(local_env)) {}
+DBCloudImpl::DBCloudImpl(DB* db, std::unique_ptr<Env> local_env,
+                         CloudFileSystem* cfs,
+                         std::shared_ptr<FileLifecycleLogger> lifecycle_logger,
+                         std::unique_ptr<FileLifecycleTracker>
+                             lifecycle_tracker)
+    : DBCloud(db),
+      cfs_(cfs),
+      local_env_(std::move(local_env)),
+      lifecycle_logger_(std::move(lifecycle_logger)),
+      lifecycle_tracker_(std::move(lifecycle_tracker)) {}
 
-DBCloudImpl::~DBCloudImpl() {}
+DBCloudImpl::~DBCloudImpl() {
+  if (lifecycle_tracker_) {
+    lifecycle_tracker_->Stop();
+  }
+}
 
 Status DBCloud::Open(const Options& options, const std::string& dbname,
                      const std::string& persistent_cache_path,
@@ -101,6 +123,37 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   assert(cfs);
   if (!cfs->GetLogger()) {
     cfs->SetLogger(options.info_log);
+  }
+  auto* cfs_impl =
+      dynamic_cast<CloudFileSystemImpl*>(options.env->GetFileSystem().get());
+
+  std::shared_ptr<FileLifecycleLogger> lifecycle_logger;
+  if (cfs_impl) {
+    const auto& cfs_opts = cfs_impl->GetCloudFileSystemOptions();
+    if (cfs_opts.enable_file_lifecycle_logging ||
+        !cfs_opts.file_lifecycle_log_path.empty()) {
+      std::string log_path = cfs_opts.file_lifecycle_log_path;
+      if (log_path.empty()) {
+        log_path = DefaultLifecycleLogPath(options, local_dbname);
+      }
+      lifecycle_logger = FileLifecycleLogger::Create(
+          cfs_impl->GetBaseFileSystem(), options.env, log_path, local_dbname,
+          read_only ? "reader" : "writer", "" /* db_id */,
+          cfs_opts.file_lifecycle_verbose);
+      if (lifecycle_logger && lifecycle_logger->enabled()) {
+        options.listeners.push_back(
+            std::make_shared<FileLifecycleListener>(lifecycle_logger));
+        cfs_impl->SetFileLifecycleLogger(lifecycle_logger);
+        lifecycle_logger->LogEvent(
+            "lifecycle_log_started",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("log_path", log_path);
+              w->AddBool("read_only", read_only);
+            });
+      } else {
+        lifecycle_logger.reset();
+      }
+    }
   }
   // Use a constant sized SST File Manager if necesary.
   // NOTE: if user already passes in an SST File Manager, we will respect user's
@@ -200,6 +253,12 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   } else {
     st = DB::Open(options, local_dbname, column_families, handles, &db);
   }
+  if (!st.ok() && lifecycle_logger) {
+    lifecycle_logger->LogEvent(
+        "db_open_failed", [&](FileLifecycleLogger::JsonWriter* w) {
+          w->AddString("status", st.ToString());
+        });
+  }
 
   if (new_db && st.ok() && cfs->HasDestBucket() &&
       cfs->GetCloudFileSystemOptions().roll_cloud_manifest_on_open) {
@@ -220,9 +279,28 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   }
 
   if (st.ok()) {
-    DBCloudImpl* cloud = new DBCloudImpl(db, std::move(local_env));
-    *dbptr = cloud;
     db->GetDbIdentity(dbid);
+    if (lifecycle_logger) {
+      lifecycle_logger->SetDbId(dbid);
+      lifecycle_logger->LogEvent(
+          "db_opened", [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("status", st.ToString());
+          });
+    }
+    std::unique_ptr<FileLifecycleTracker> lifecycle_tracker;
+    if (lifecycle_logger && cfs_impl) {
+      const auto& cfs_opts = cfs_impl->GetCloudFileSystemOptions();
+      if (cfs_opts.file_lifecycle_snapshot_period_sec > 0) {
+        lifecycle_tracker.reset(new FileLifecycleTracker(
+            db, cfs_impl, lifecycle_logger, options.env,
+            cfs_opts.file_lifecycle_snapshot_period_sec));
+        lifecycle_tracker->Start();
+      }
+    }
+    DBCloudImpl* cloud =
+        new DBCloudImpl(db, std::move(local_env), cfs, lifecycle_logger,
+                        std::move(lifecycle_tracker));
+    *dbptr = cloud;
   }
   Log(InfoLogLevel::INFO_LEVEL, options.info_log,
       "Opened cloud db with local dir %s dbid %s. %s", local_dbname.c_str(),

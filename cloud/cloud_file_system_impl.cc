@@ -6,6 +6,7 @@
 #include <cinttypes>
 
 #include "cloud/cloud_log_controller_impl.h"
+#include "cloud/file_lifecycle_logger.h"
 #include "cloud/cloud_manifest.h"
 #include "cloud/cloud_scheduler.h"
 #include "cloud/filename.h"
@@ -27,6 +28,24 @@
 #include "util/xxhash.h"
 
 namespace ROCKSDB_NAMESPACE {
+
+namespace {
+const char* RocksDBFileTypeToString(RocksDBFileType type) {
+  switch (type) {
+    case RocksDBFileType::kSstFile:
+      return "sst";
+    case RocksDBFileType::kLogFile:
+      return "log";
+    case RocksDBFileType::kManifestFile:
+      return "manifest";
+    case RocksDBFileType::kIdentityFile:
+      return "identity";
+    case RocksDBFileType::kUnknown:
+      break;
+  }
+  return "unknown";
+}
+}  // namespace
 
 CloudFileSystemImpl::CloudFileSystemImpl(
     const CloudFileSystemOptions& opts, const std::shared_ptr<FileSystem>& base,
@@ -54,26 +73,66 @@ CloudFileSystemImpl::~CloudFileSystemImpl() {
 
 IOStatus CloudFileSystemImpl::ExistsCloudObject(const std::string& fname) {
   auto st = IOStatus::NotFound();
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   if (HasDestBucket()) {
-    st = GetStorageProvider()->ExistsCloudObject(GetDestBucketName(),
-                                                 destname(fname));
+    auto object = destname(fname);
+    st = GetStorageProvider()->ExistsCloudObject(GetDestBucketName(), object);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_exists",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("object", object);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   if (st.IsNotFound() && HasSrcBucket() && !SrcMatchesDest()) {
-    st = GetStorageProvider()->ExistsCloudObject(GetSrcBucketName(),
-                                                 srcname(fname));
+    auto object = srcname(fname);
+    st = GetStorageProvider()->ExistsCloudObject(GetSrcBucketName(), object);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_exists",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetSrcBucketName());
+                                    w->AddString("object", object);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   return st;
 }
 
 IOStatus CloudFileSystemImpl::GetCloudObject(const std::string& fname) {
   auto st = IOStatus::NotFound();
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   if (HasDestBucket()) {
-    st = GetStorageProvider()->GetCloudObject(GetDestBucketName(),
-                                              destname(fname), fname);
+    auto object = destname(fname);
+    st = GetStorageProvider()->GetCloudObject(GetDestBucketName(), object,
+                                              fname);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_get",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("object", object);
+                                    w->AddString("local_file", fname);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   if (st.IsNotFound() && HasSrcBucket() && !SrcMatchesDest()) {
-    st = GetStorageProvider()->GetCloudObject(GetSrcBucketName(),
-                                              srcname(fname), fname);
+    auto object = srcname(fname);
+    st = GetStorageProvider()->GetCloudObject(GetSrcBucketName(), object,
+                                              fname);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_get",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetSrcBucketName());
+                                    w->AddString("object", object);
+                                    w->AddString("local_file", fname);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   return st;
 }
@@ -81,13 +140,39 @@ IOStatus CloudFileSystemImpl::GetCloudObject(const std::string& fname) {
 IOStatus CloudFileSystemImpl::GetCloudObjectSize(const std::string& fname,
                                                  uint64_t* remote_size) {
   auto st = IOStatus::NotFound();
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   if (HasDestBucket()) {
-    st = GetStorageProvider()->GetCloudObjectSize(GetDestBucketName(),
-                                                  destname(fname), remote_size);
+    auto object = destname(fname);
+    st = GetStorageProvider()->GetCloudObjectSize(GetDestBucketName(), object,
+                                                  remote_size);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_head_size",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("object", object);
+                                    if (st.ok()) {
+                                      w->AddUint64("size_bytes", *remote_size);
+                                    }
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   if (st.IsNotFound() && HasSrcBucket() && !SrcMatchesDest()) {
-    st = GetStorageProvider()->GetCloudObjectSize(GetSrcBucketName(),
-                                                  srcname(fname), remote_size);
+    auto object = srcname(fname);
+    st = GetStorageProvider()->GetCloudObjectSize(GetSrcBucketName(), object,
+                                                  remote_size);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_head_size",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetSrcBucketName());
+                                    w->AddString("object", object);
+                                    if (st.ok()) {
+                                      w->AddUint64("size_bytes", *remote_size);
+                                    }
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   return st;
 }
@@ -95,13 +180,39 @@ IOStatus CloudFileSystemImpl::GetCloudObjectSize(const std::string& fname,
 IOStatus CloudFileSystemImpl::GetCloudObjectModificationTime(
     const std::string& fname, uint64_t* time) {
   auto st = IOStatus::NotFound();
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   if (HasDestBucket()) {
+    auto object = destname(fname);
     st = GetStorageProvider()->GetCloudObjectModificationTime(
-        GetDestBucketName(), destname(fname), time);
+        GetDestBucketName(), object, time);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_head_mtime",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("object", object);
+                                    if (st.ok()) {
+                                      w->AddUint64("mtime", *time);
+                                    }
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   if (st.IsNotFound() && HasSrcBucket() && !SrcMatchesDest()) {
+    auto object = srcname(fname);
     st = GetStorageProvider()->GetCloudObjectModificationTime(
-        GetSrcBucketName(), srcname(fname), time);
+        GetSrcBucketName(), object, time);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_head_mtime",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetSrcBucketName());
+                                    w->AddString("object", object);
+                                    if (st.ok()) {
+                                      w->AddUint64("mtime", *time);
+                                    }
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   return st;
 }
@@ -109,10 +220,22 @@ IOStatus CloudFileSystemImpl::GetCloudObjectModificationTime(
 IOStatus CloudFileSystemImpl::ListCloudObjects(
     const std::string& path, std::vector<std::string>* result) {
   IOStatus st;
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   // Fetch the list of children from both cloud buckets
   if (HasSrcBucket()) {
     st = GetStorageProvider()->ListCloudObjects(GetSrcBucketName(),
                                                 GetSrcObjectPath(), result);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_list",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetSrcBucketName());
+                                    w->AddString("prefix",
+                                                 GetSrcObjectPath());
+                                    w->AddUint64("count", result->size());
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
     if (!st.ok()) {
       Log(InfoLogLevel::ERROR_LEVEL, info_log_,
           "[%s] GetChildren src bucket %s %s error from %s %s", Name(),
@@ -124,6 +247,16 @@ IOStatus CloudFileSystemImpl::ListCloudObjects(
   if (HasDestBucket() && !SrcMatchesDest()) {
     st = GetStorageProvider()->ListCloudObjects(GetDestBucketName(),
                                                 GetDestObjectPath(), result);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_list",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("prefix",
+                                                 GetDestObjectPath());
+                                    w->AddUint64("count", result->size());
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
     if (!st.ok()) {
       Log(InfoLogLevel::ERROR_LEVEL, info_log_,
           "[%s] GetChildren dest bucket %s %s error from %s %s", Name(),
@@ -138,16 +271,36 @@ IOStatus CloudFileSystemImpl::NewCloudReadableFile(
     const std::string& fname, const FileOptions& options,
     std::unique_ptr<CloudStorageReadableFile>* result, IODebugContext* dbg) {
   auto st = IOStatus::NotFound();
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   if (HasDestBucket()) {  // read from destination
-    st = GetStorageProvider()->NewCloudReadableFile(
-        GetDestBucketName(), destname(fname), options, result, dbg);
+    auto object = destname(fname);
+    st = GetStorageProvider()->NewCloudReadableFile(GetDestBucketName(), object,
+                                                    options, result, dbg);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_new_readable",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("object", object);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
     if (st.ok()) {
       return st;
     }
   }
   if (HasSrcBucket() && !SrcMatchesDest()) {  // read from src bucket
-    st = GetStorageProvider()->NewCloudReadableFile(
-        GetSrcBucketName(), srcname(fname), options, result, dbg);
+    auto object = srcname(fname);
+    st = GetStorageProvider()->NewCloudReadableFile(GetSrcBucketName(), object,
+                                                    options, result, dbg);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("cloud_new_readable",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetSrcBucketName());
+                                    w->AddString("object", object);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
   return st;
 }
@@ -160,10 +313,14 @@ IOStatus CloudFileSystemImpl::NewSequentialFile(
 
   auto fname = RemapFilename(logical_fname);
   auto file_type = GetFileType(fname);
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   bool sstfile = (file_type == RocksDBFileType::kSstFile),
        manifest = (file_type == RocksDBFileType::kManifestFile),
        identity = (file_type == RocksDBFileType::kIdentityFile),
        logfile = (file_type == RocksDBFileType::kLogFile);
+  std::string source = "local";
+  bool copied_from_cloud = false;
 
   auto st = status_to_io_status(CheckOption(file_opts));
   if (!st.ok()) {
@@ -178,6 +335,7 @@ IOStatus CloudFileSystemImpl::NewSequentialFile(
         // copy the file to the local storage if keep_local_sst_files is true
         st = GetCloudObject(fname);
         if (st.ok()) {
+          copied_from_cloud = true;
           // we successfully copied the file, try opening it locally now
           st = base_fs_->NewSequentialFile(fname, file_opts, result, dbg);
         }
@@ -187,20 +345,65 @@ IOStatus CloudFileSystemImpl::NewSequentialFile(
       st = NewCloudReadableFile(fname, file_opts, &file, dbg);
       if (st.ok()) {
         result->reset(file.release());
+        source = "cloud";
       }
     }
     Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
         "[%s] NewSequentialFile file %s %s", Name(), fname.c_str(),
         st.ToString().c_str());
+    if (verbose) {
+      if (copied_from_cloud && source != "cloud") {
+        source = "cloud_copy";
+      }
+      lifecycle_logger_->LogEvent("file_open",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("access", "sequential");
+                                    w->AddString("logical_path", logical_fname);
+                                    w->AddString("path", fname);
+                                    w->AddString("source", source);
+                                    w->AddString("file_type",
+                                                 RocksDBFileTypeToString(
+                                                     file_type));
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
     return st;
 
   } else if (logfile && !cloud_fs_options.keep_local_log_files) {
-    return cloud_fs_options.cloud_log_controller->NewSequentialFile(
+    st = cloud_fs_options.cloud_log_controller->NewSequentialFile(
         fname, file_opts, result, dbg);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_open",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("access", "sequential");
+                                    w->AddString("logical_path", logical_fname);
+                                    w->AddString("path", fname);
+                                    w->AddString("source", "log_controller");
+                                    w->AddString("file_type",
+                                                 RocksDBFileTypeToString(
+                                                     file_type));
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
   }
 
   // This is neither a sst file or a log file. Read from default env.
-  return base_fs_->NewSequentialFile(fname, file_opts, result, dbg);
+  st = base_fs_->NewSequentialFile(fname, file_opts, result, dbg);
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_open",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("access", "sequential");
+                                  w->AddString("logical_path", logical_fname);
+                                  w->AddString("path", fname);
+                                  w->AddString("source", "local");
+                                  w->AddString(
+                                      "file_type",
+                                      RocksDBFileTypeToString(file_type));
+                                  w->AddString("status", st.ToString());
+                                });
+  }
+  return st;
 }
 
 // Ability to read a file directly from cloud storage
@@ -227,10 +430,14 @@ IOStatus CloudFileSystemImpl::NewRandomAccessFile(
 
   auto fname = RemapFilename(logical_fname);
   auto file_type = GetFileType(fname);
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   bool sstfile = (file_type == RocksDBFileType::kSstFile),
        manifest = (file_type == RocksDBFileType::kManifestFile),
        identity = (file_type == RocksDBFileType::kIdentityFile),
        logfile = (file_type == RocksDBFileType::kLogFile);
+  std::string source = "local";
+  bool copied_from_cloud = false;
 
   // Validate options
   auto st = status_to_io_status(CheckOption(file_opts));
@@ -253,6 +460,7 @@ IOStatus CloudFileSystemImpl::NewRandomAccessFile(
         // copy the file to the local storage
         st = GetCloudObject(fname);
         if (st.ok()) {
+          copied_from_cloud = true;
           // we successfully copied the file, try opening it locally now
           st = base_fs_->NewRandomAccessFile(fname, file_opts, result, dbg);
         }
@@ -288,22 +496,66 @@ IOStatus CloudFileSystemImpl::NewRandomAccessFile(
       st = NewCloudReadableFile(fname, file_opts, &file, dbg);
       if (st.ok()) {
         result->reset(file.release());
+        source = "cloud";
       }
     }
     Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
         "[%s] NewRandomAccessFile file %s %s", Name(), fname.c_str(),
         st.ToString().c_str());
+    if (verbose) {
+      if (copied_from_cloud && source != "cloud") {
+        source = "cloud_copy";
+      }
+      lifecycle_logger_->LogEvent("file_open",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("access", "random");
+                                    w->AddString("logical_path", logical_fname);
+                                    w->AddString("path", fname);
+                                    w->AddString("source", source);
+                                    w->AddString("file_type",
+                                                 RocksDBFileTypeToString(
+                                                     file_type));
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
     return st;
 
   } else if (logfile && !cloud_fs_options.keep_local_log_files) {
     // read from LogController
     st = cloud_fs_options.cloud_log_controller->NewRandomAccessFile(
         fname, file_opts, result, dbg);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_open",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("access", "random");
+                                    w->AddString("logical_path", logical_fname);
+                                    w->AddString("path", fname);
+                                    w->AddString("source", "log_controller");
+                                    w->AddString("file_type",
+                                                 RocksDBFileTypeToString(
+                                                     file_type));
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
     return st;
   }
 
   // This is neither a sst file or a log file. Read from default env.
-  return base_fs_->NewRandomAccessFile(fname, file_opts, result, dbg);
+  st = base_fs_->NewRandomAccessFile(fname, file_opts, result, dbg);
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_open",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("access", "random");
+                                  w->AddString("logical_path", logical_fname);
+                                  w->AddString("path", fname);
+                                  w->AddString("source", "local");
+                                  w->AddString(
+                                      "file_type",
+                                      RocksDBFileTypeToString(file_type));
+                                  w->AddString("status", st.ToString());
+                                });
+  }
+  return st;
 }
 
 // create a new file for writing
@@ -314,12 +566,15 @@ IOStatus CloudFileSystemImpl::NewWritableFile(
 
   auto fname = RemapFilename(logical_fname);
   auto file_type = GetFileType(fname);
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   bool sstfile = (file_type == RocksDBFileType::kSstFile),
        manifest = (file_type == RocksDBFileType::kManifestFile),
        identity = (file_type == RocksDBFileType::kIdentityFile),
        logfile = (file_type == RocksDBFileType::kLogFile);
 
   IOStatus s;
+  std::string source = "local";
   if (HasDestBucket() && (sstfile || identity || manifest)) {
     std::unique_ptr<CloudStorageWritableFile> f;
     s = GetStorageProvider()->NewCloudWritableFile(
@@ -339,6 +594,7 @@ IOStatus CloudFileSystemImpl::NewWritableFile(
       return s;
     }
     result->reset(f.release());
+    source = "cloud";
   } else if (logfile && !cloud_fs_options.keep_local_log_files) {
     std::unique_ptr<CloudLogWritableFile> f(
         cloud_fs_options.cloud_log_controller->CreateWritableFile(
@@ -351,11 +607,29 @@ IOStatus CloudFileSystemImpl::NewWritableFile(
       return s;
     }
     result->reset(f.release());
+    source = "log_controller";
   } else {
     s = base_fs_->NewWritableFile(fname, file_opts, result, dbg);
   }
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[%s] NewWritableFile src %s %s",
       Name(), fname.c_str(), s.ToString().c_str());
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_create",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("logical_path", logical_fname);
+                                  w->AddString("path", fname);
+                                  w->AddString("source", source);
+                                  w->AddString(
+                                      "file_type",
+                                      RocksDBFileTypeToString(file_type));
+                                  if (source == "cloud") {
+                                    w->AddString("bucket",
+                                                 GetDestBucketName());
+                                    w->AddString("object", destname(fname));
+                                  }
+                                  w->AddString("status", s.ToString());
+                                });
+  }
   return s;
 }
 
@@ -366,7 +640,15 @@ IOStatus CloudFileSystemImpl::ReopenWritableFile(
   // an provider file in append mode. We still need to support this because
   // rocksdb's ExternalSstFileIngestionJob invokes this api to reopen
   // a pre-created file to flush/sync it.
-  return base_fs_->ReopenWritableFile(fname, file_opts, result, dbg);
+  auto st = base_fs_->ReopenWritableFile(fname, file_opts, result, dbg);
+  if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+    lifecycle_logger_->LogEvent("file_reopen",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("path", fname);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
+  return st;
 }
 
 //
@@ -379,6 +661,8 @@ IOStatus CloudFileSystemImpl::FileExists(const std::string& logical_fname,
 
   auto fname = RemapFilename(logical_fname);
   auto file_type = GetFileType(fname);
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   bool sstfile = (file_type == RocksDBFileType::kSstFile),
        manifest = (file_type == RocksDBFileType::kManifestFile),
        identity = (file_type == RocksDBFileType::kIdentityFile),
@@ -398,6 +682,17 @@ IOStatus CloudFileSystemImpl::FileExists(const std::string& logical_fname,
   }
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[%s] FileExists path '%s' %s",
       Name(), fname.c_str(), st.ToString().c_str());
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_exists",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("logical_path", logical_fname);
+                                  w->AddString("path", fname);
+                                  w->AddString(
+                                      "file_type",
+                                      RocksDBFileTypeToString(file_type));
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   return st;
 }
 
@@ -525,6 +820,8 @@ IOStatus CloudFileSystemImpl::RenameFile(const std::string& logical_src,
                                          IODebugContext* dbg) {
   auto src = RemapFilename(logical_src);
   auto target = RemapFilename(logical_target);
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   // Get file type of target
   auto file_type = GetFileType(target);
   bool sstfile = (file_type == RocksDBFileType::kSstFile),
@@ -538,24 +835,60 @@ IOStatus CloudFileSystemImpl::RenameFile(const std::string& logical_src,
         "[%s] RenameFile source sstfile %s %s is not supported", Name(),
         src.c_str(), target.c_str());
     assert(0);
-    return IOStatus::NotSupported(Slice(src), Slice(target));
+    auto st = IOStatus::NotSupported(Slice(src), Slice(target));
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_rename",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("src", src);
+                                    w->AddString("target", target);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
   } else if (logfile) {
     // Rename should never be called on log files as well
     Log(InfoLogLevel::ERROR_LEVEL, info_log_,
         "[%s] RenameFile source logfile %s %s is not supported", Name(),
         src.c_str(), target.c_str());
     assert(0);
-    return IOStatus::NotSupported(Slice(src), Slice(target));
+    auto st = IOStatus::NotSupported(Slice(src), Slice(target));
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_rename",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("src", src);
+                                    w->AddString("target", target);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
   } else if (manifest) {
     // Rename should never be called on manifest files as well
     Log(InfoLogLevel::ERROR_LEVEL, info_log_,
         "[%s] RenameFile source manifest %s %s is not supported", Name(),
         src.c_str(), target.c_str());
     assert(0);
-    return IOStatus::NotSupported(Slice(src), Slice(target));
+    auto st = IOStatus::NotSupported(Slice(src), Slice(target));
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_rename",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("src", src);
+                                    w->AddString("target", target);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
 
   } else if (!identity || !HasDestBucket()) {
-    return base_fs_->RenameFile(src, target, io_opts, dbg);
+    auto st = base_fs_->RenameFile(src, target, io_opts, dbg);
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_rename",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("src", src);
+                                    w->AddString("target", target);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
   }
   // Only ID file should come here
   assert(identity);
@@ -572,6 +905,14 @@ IOStatus CloudFileSystemImpl::RenameFile(const std::string& logical_src,
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
       "[%s] RenameFile src %s target %s: %s", Name(), src.c_str(),
       target.c_str(), st.ToString().c_str());
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_rename",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("src", src);
+                                  w->AddString("target", target);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   return st;
 }
 
@@ -579,13 +920,33 @@ IOStatus CloudFileSystemImpl::LinkFile(const std::string& src,
                                        const std::string& target,
                                        const IOOptions& io_opts,
                                        IODebugContext* dbg) {
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   // We only know how to link file if both src and dest buckets are empty
   if (HasDestBucket() || HasSrcBucket()) {
-    return IOStatus::NotSupported();
+    auto st = IOStatus::NotSupported();
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_link",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("src", src);
+                                    w->AddString("target", target);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
   }
   auto src_remapped = RemapFilename(src);
   auto target_remapped = RemapFilename(target);
-  return base_fs_->LinkFile(src_remapped, target_remapped, io_opts, dbg);
+  auto st = base_fs_->LinkFile(src_remapped, target_remapped, io_opts, dbg);
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_link",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("src", src_remapped);
+                                  w->AddString("target", target_remapped);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
+  return st;
 }
 
 namespace {
@@ -657,6 +1018,13 @@ IOStatus CloudFileSystemImpl::CreateDir(const std::string& dirname,
 
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[%s] CreateDir dir %s %s", Name(),
       dirname.c_str(), st.ToString().c_str());
+  if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+    lifecycle_logger_->LogEvent("dir_create",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("path", dirname);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   return st;
 };
 
@@ -674,6 +1042,13 @@ IOStatus CloudFileSystemImpl::CreateDirIfMissing(const std::string& dirname,
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
       "[%s] CreateDirIfMissing created dir %s %s", Name(), dirname.c_str(),
       st.ToString().c_str());
+  if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+    lifecycle_logger_->LogEvent("dir_create_if_missing",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("path", dirname);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   return st;
 };
 
@@ -687,6 +1062,13 @@ IOStatus CloudFileSystemImpl::DeleteDir(const std::string& dirname,
   auto st = base_fs_->DeleteDir(dirname, io_opts, dbg);
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[%s] DeleteDir dir %s %s", Name(),
       dirname.c_str(), st.ToString().c_str());
+  if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+    lifecycle_logger_->LogEvent("dir_delete",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("path", dirname);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   return st;
 };
 
@@ -695,6 +1077,8 @@ IOStatus CloudFileSystemImpl::DeleteFile(const std::string& logical_fname,
                                          IODebugContext* dbg) {
   auto fname = RemapFilename(logical_fname);
   auto file_type = GetFileType(fname);
+  const bool verbose =
+      lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose;
   bool sstfile = (file_type == RocksDBFileType::kSstFile),
        manifest = (file_type == RocksDBFileType::kManifestFile),
        identity = (file_type == RocksDBFileType::kIdentityFile),
@@ -723,7 +1107,19 @@ IOStatus CloudFileSystemImpl::DeleteFile(const std::string& logical_fname,
     // always remap MANIFEST files to the correct with the latest epoch.
     // 5. Also nothing. There is no file to delete, because we have overwritten
     // it in the third step.
-    return IOStatus::OK();
+    auto st = IOStatus::OK();
+    if (verbose) {
+      lifecycle_logger_->LogEvent("file_delete",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("logical_path", logical_fname);
+                                    w->AddString("path", fname);
+                                    w->AddString(
+                                        "file_type",
+                                        RocksDBFileTypeToString(file_type));
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
   }
 
   IOStatus st;
@@ -759,6 +1155,17 @@ IOStatus CloudFileSystemImpl::DeleteFile(const std::string& logical_fname,
   }
   Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[%s] DeleteFile file %s %s",
       Name(), fname.c_str(), st.ToString().c_str());
+  if (verbose) {
+    lifecycle_logger_->LogEvent("file_delete",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("logical_path", logical_fname);
+                                  w->AddString("path", fname);
+                                  w->AddString(
+                                      "file_type",
+                                      RocksDBFileTypeToString(file_type));
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   return st;
 }
 
@@ -770,8 +1177,16 @@ IOStatus CloudFileSystemImpl::CopyLocalFileToDest(
     cloud_file_deletion_scheduler_->UnscheduleFileDeletion(
         basename(local_name));
   }
-  return GetStorageProvider()->PutCloudObject(local_name, GetDestBucketName(),
-                                              dest_name, options);
+  auto st = GetStorageProvider()->PutCloudObject(local_name, GetDestBucketName(),
+                                                 dest_name, options);
+  if (st.ok() && lifecycle_logger_) {
+    lifecycle_logger_->LogEvent("cloud_upload",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("local_file", local_name);
+                                  w->AddString("dest_file", dest_name);
+                                });
+  }
+  return st;
 }
 
 IOStatus CloudFileSystemImpl::DeleteCloudFileFromDest(
@@ -781,21 +1196,56 @@ IOStatus CloudFileSystemImpl::DeleteCloudFileFromDest(
   auto path = GetDestObjectPath() + pathsep + base;
   auto bucket = GetDestBucketName();
   if (!cloud_file_deletion_scheduler_) {
-    return GetStorageProvider()->DeleteCloudObject(bucket, path);
+    auto st = GetStorageProvider()->DeleteCloudObject(bucket, path);
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent("cloud_delete_immediate",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("file_name", base);
+                                    w->AddString("cloud_path", path);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
+    return st;
+  }
+  if (lifecycle_logger_) {
+    lifecycle_logger_->LogEvent("cloud_delete_scheduled",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("file_name", base);
+                                  w->AddString("cloud_path", path);
+                                  if (cloud_fs_options.cloud_file_deletion_delay) {
+                                    w->AddInt64(
+                                        "delay_sec",
+                                        cloud_fs_options.cloud_file_deletion_delay
+                                            ->count());
+                                  }
+                                });
   }
   std::weak_ptr<Logger> info_log_wp = info_log_;
   std::weak_ptr<CloudStorageProvider> storage_provider_wp =
       GetStorageProvider();
+  std::weak_ptr<FileLifecycleLogger> lifecycle_logger_wp = lifecycle_logger_;
+  auto base_name = base;
   auto file_deletion_runnable =
       [path = std::move(path), bucket = std::move(bucket),
        info_log_wp = std::move(info_log_wp),
-       storage_provider_wp = std::move(storage_provider_wp)]() {
+       storage_provider_wp = std::move(storage_provider_wp),
+       lifecycle_logger_wp = std::move(lifecycle_logger_wp),
+       base = std::move(base_name)]() {
         auto storage_provider = storage_provider_wp.lock();
         auto info_log = info_log_wp.lock();
+        auto lifecycle_logger = lifecycle_logger_wp.lock();
         if (!storage_provider || !info_log) {
           return;
         }
         auto st = storage_provider->DeleteCloudObject(bucket, path);
+        if (lifecycle_logger) {
+          lifecycle_logger->LogEvent("cloud_delete_done",
+                                     [&](FileLifecycleLogger::JsonWriter* w) {
+                                       w->AddString("file_name", base);
+                                       w->AddString("cloud_path", path);
+                                       w->AddString("status", st.ToString());
+                                     });
+        }
         if (!st.ok() && !st.IsNotFound()) {
           Log(InfoLogLevel::ERROR_LEVEL, info_log,
               "[CloudFileSystemImpl] DeleteFile file %s error %s", path.c_str(),
@@ -820,6 +1270,15 @@ IOStatus CloudFileSystemImpl::SaveIdentityToCloud(const std::string& localfile,
   if (st.ok()) {
     st = GetStorageProvider()->PutCloudObject(localfile, GetDestBucketName(),
                                               idfile);
+    if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+      lifecycle_logger_->LogEvent("cloud_put_identity",
+                                  [&](FileLifecycleLogger::JsonWriter* w) {
+                                    w->AddString("bucket", GetDestBucketName());
+                                    w->AddString("object", idfile);
+                                    w->AddString("local_file", localfile);
+                                    w->AddString("status", st.ToString());
+                                  });
+    }
   }
 
   // Save mapping from ID to cloud pathname
@@ -899,7 +1358,24 @@ std::string CloudFileSystemImpl::RemapFilename(
   if (UNLIKELY(test_disable_cloud_manifest_)) {
     return logical_path;
   }
-  return RemapFilenameWithCloudManifest(logical_path, cloud_manifest_.get());
+  auto remapped =
+      RemapFilenameWithCloudManifest(logical_path, cloud_manifest_.get());
+  if (remapped != logical_path && lifecycle_logger_ &&
+      cloud_fs_options.file_lifecycle_verbose) {
+    std::string epoch;
+    if (cloud_manifest_) {
+      epoch = cloud_manifest_->GetCurrentEpoch();
+    }
+    lifecycle_logger_->LogEvent("file_remap",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("logical_path", logical_path);
+                                  w->AddString("remapped_path", remapped);
+                                  if (!epoch.empty()) {
+                                    w->AddString("cloud_epoch", epoch);
+                                  }
+                                });
+  }
+  return remapped;
 }
 
 IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
@@ -917,7 +1393,17 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
   }
 
   for (auto& fname : pathnames) {
-    if (IsFileInvisible(active_cookies, fname)) {
+    std::string reason;
+    if (IsFileInvisible(active_cookies, fname, &reason)) {
+      if (lifecycle_logger_) {
+        lifecycle_logger_->LogEvent(
+            "cloud_invisible_cloud_delete",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("file_name", fname);
+              w->AddString("reason", reason);
+              w->AddStringList("active_cookies", active_cookies);
+            });
+      }
       // Ignore returned status on purpose.
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
           "DeleteCloudInvisibleFiles deleting %s from destination bucket",
@@ -943,7 +1429,17 @@ IOStatus CloudFileSystemImpl::DeleteLocalInvisibleFiles(
     return s;
   }
   for (auto& fname : children) {
-    if (IsFileInvisible(active_cookies, fname)) {
+    std::string reason;
+    if (IsFileInvisible(active_cookies, fname, &reason)) {
+      if (lifecycle_logger_) {
+        lifecycle_logger_->LogEvent(
+            "cloud_invisible_local_delete",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("file_name", fname);
+              w->AddString("reason", reason);
+              w->AddStringList("active_cookies", active_cookies);
+            });
+      }
       // Ignore returned status on purpose.
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
           "DeleteLocalInvisibleFiles deleting file %s from local dir",
@@ -955,8 +1451,8 @@ IOStatus CloudFileSystemImpl::DeleteLocalInvisibleFiles(
 }
 
 bool CloudFileSystemImpl::IsFileInvisible(
-    const std::vector<std::string>& active_cookies,
-    const std::string& fname) const {
+    const std::vector<std::string>& active_cookies, const std::string& fname,
+    std::string* reason) const {
   if (IsCloudManifestFile(fname)) {
     auto fname_cookie = GetCookie(fname);
 
@@ -974,11 +1470,20 @@ bool CloudFileSystemImpl::IsFileInvisible(
       }
     }
 
-    return !is_active;
+    if (!is_active) {
+      if (reason != nullptr) {
+        *reason = "cloudmanifest_cookie_inactive";
+      }
+      return true;
+    }
+    return false;
   } else {
     auto noepoch = RemoveEpoch(fname);
     if ((IsSstFile(noepoch) || IsManifestFile(noepoch)) &&
         (RemapFilename(noepoch) != fname)) {
+      if (reason != nullptr) {
+        *reason = "epoch_mismatch";
+      }
       return true;
     }
   }
@@ -1552,11 +2057,11 @@ IOStatus CloudFileSystemImpl::LoadCloudManifest(const std::string& local_dbname,
   // We only cleanup files which don't belong to cookie_on_open. Also, we do it
   // before rolling the epoch, so that newly generated CM/M files won't be
   // cleaned up.
-  if (st.ok() && !read_only) {
+  if (st.ok()) {
     std::vector<std::string> active_cookies{
         cloud_fs_options.cookie_on_open, cloud_fs_options.new_cookie_on_open};
     st = DeleteLocalInvisibleFiles(local_dbname, active_cookies);
-    if (st.ok() && cloud_fs_options.delete_cloud_invisible_files_on_open &&
+    if (st.ok() && !read_only && cloud_fs_options.delete_cloud_invisible_files_on_open &&
         HasDestBucket()) {
       st = DeleteCloudInvisibleFiles(active_cookies);
     }
@@ -1961,9 +2466,19 @@ IOStatus CloudFileSystemImpl::UploadManifest(const std::string& local_dbname,
         "Dest bucket has to be specified when uploading manifest files");
   }
 
-  auto st = GetStorageProvider()->PutCloudObject(
-      ManifestFileWithEpoch(local_dbname, epoch), GetDestBucketName(),
-      ManifestFileWithEpoch(GetDestObjectPath(), epoch));
+  auto local_file = ManifestFileWithEpoch(local_dbname, epoch);
+  auto object = ManifestFileWithEpoch(GetDestObjectPath(), epoch);
+  auto st = GetStorageProvider()->PutCloudObject(local_file,
+                                                 GetDestBucketName(), object);
+  if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+    lifecycle_logger_->LogEvent("cloud_put_manifest",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("bucket", GetDestBucketName());
+                                  w->AddString("object", object);
+                                  w->AddString("local_file", local_file);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
 
   TEST_SYNC_POINT_CALLBACK(
       "CloudFileSystemImpl::UploadManifest:AfterUploadManifest", &st);
@@ -1978,9 +2493,19 @@ IOStatus CloudFileSystemImpl::UploadCloudManifest(
   }
   // upload the cloud manifest file corresponds to cookie (i.e.,
   // CLOUDMANIFEST-cookie)
-  auto st = GetStorageProvider()->PutCloudObject(
-      MakeCloudManifestFile(local_dbname, cookie), GetDestBucketName(),
-      MakeCloudManifestFile(GetDestObjectPath(), cookie));
+  auto local_file = MakeCloudManifestFile(local_dbname, cookie);
+  auto object = MakeCloudManifestFile(GetDestObjectPath(), cookie);
+  auto st = GetStorageProvider()->PutCloudObject(local_file,
+                                                 GetDestBucketName(), object);
+  if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
+    lifecycle_logger_->LogEvent("cloud_put_cloud_manifest",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("bucket", GetDestBucketName());
+                                  w->AddString("object", object);
+                                  w->AddString("local_file", local_file);
+                                  w->AddString("status", st.ToString());
+                                });
+  }
   if (!st.ok()) {
     return st;
   }

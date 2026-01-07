@@ -18,6 +18,7 @@ class CloudScheduler;
 class CloudStorageReadableFile;
 class ObjectLibrary;
 class CloudFileDeletionScheduler;
+class FileLifecycleLogger;
 
 //
 // The Cloud file system
@@ -414,8 +415,11 @@ class CloudFileSystemImpl : public CloudFileSystem {
   }
 
   Logger* GetLogger() const override { return info_log_.get(); }
-  void SetLogger(std::shared_ptr<Logger> l) override {
-    info_log_ = std::move(l);
+ void SetLogger(std::shared_ptr<Logger> l) override {
+   info_log_ = std::move(l);
+ }
+  void SetFileLifecycleLogger(std::shared_ptr<FileLifecycleLogger> logger) {
+    lifecycle_logger_ = std::move(logger);
   }
 
  private:
@@ -427,7 +431,8 @@ class CloudFileSystemImpl : public CloudFileSystem {
   // 00010.sst-[epochX], but the real mapping for 00010.sst is [epochY], the
   // file will be treated as invisible
   bool IsFileInvisible(const std::vector<std::string>& active_cookies,
-                       const std::string& fname) const;
+                       const std::string& fname,
+                       std::string* reason) const;
 
   void log(InfoLogLevel level, const std::string& fname,
            const std::string& msg);
@@ -453,6 +458,7 @@ class CloudFileSystemImpl : public CloudFileSystem {
   // scratch space in local dir
   static constexpr const char* SCRATCH_LOCAL_DIR = "/tmp";
   std::shared_ptr<CloudFileDeletionScheduler> cloud_file_deletion_scheduler_;
+  std::shared_ptr<FileLifecycleLogger> lifecycle_logger_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

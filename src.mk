@@ -28,6 +28,9 @@ LIB_SOURCES =                                                   \
   cloud/cloud_scheduler.cc                                      \
   cloud/cloud_storage_provider.cc                               \
   cloud/cloud_file_deletion_scheduler.cc                        \
+  cloud/file_lifecycle_logger.cc                                \
+  cloud/file_lifecycle_listener.cc                              \
+  cloud/file_lifecycle_tracker.cc                               \
   db/arena_wrapped_db_iter.cc                                   \
   db/blob/blob_contents.cc                                      \
   db/blob/blob_fetcher.cc                                       \

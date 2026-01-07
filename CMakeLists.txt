@@ -981,6 +981,9 @@ set(SOURCES
         cloud/cloud_scheduler.cc
         cloud/cloud_storage_provider.cc
         cloud/cloud_file_deletion_scheduler.cc
+        cloud/file_lifecycle_logger.cc
+        cloud/file_lifecycle_listener.cc
+        cloud/file_lifecycle_tracker.cc
         db/db_impl/replication_codec.cc)
 
 list(APPEND SOURCES

@@ -2,6 +2,7 @@
 #ifndef ROCKSDB_LITE
 
 #include "rocksdb/cloud/cloud_file_system.h"
+#include <cinttypes>
 #ifndef _WIN32_WINNT
 #include <unistd.h>
 #else
@@ -17,6 +18,7 @@
 #include "env/composite_env_wrapper.h"
 #include "options/configurable_helper.h"
 #include "options/options_helper.h"
+#include "util/string_util.h"
 #include "port/likely.h"
 #include "rocksdb/cloud/cloud_file_system_impl.h"
 #include "rocksdb/cloud/cloud_log_controller.h"
@@ -84,6 +86,14 @@ void CloudFileSystemOptions::Dump(Logger* log) const {
     Header(log, "          COptions.cloud_file_deletion_delay: %lld",
            static_cast<long long>(cloud_file_deletion_delay->count()));
   }
+  Header(log, "      COptions.enable_file_lifecycle_logging: %d",
+         enable_file_lifecycle_logging);
+  Header(log, "          COptions.file_lifecycle_log_path: %s",
+         file_lifecycle_log_path.c_str());
+  Header(log, "COptions.file_lifecycle_snapshot_period_sec: %" PRIu64,
+         file_lifecycle_snapshot_period_sec);
+  Header(log, "          COptions.file_lifecycle_verbose: %d",
+         file_lifecycle_verbose);
 }
 
 bool CloudFileSystemOptions::GetNameFromEnvironment(const char* name,
@@ -358,9 +368,63 @@ const std::unordered_map<std::string, OptionTypeInfo>
         {"run_purger",
          {offset_of(&CloudFileSystemOptions::run_purger),
           OptionType::kBoolean}},
+        {"cloud_file_deletion_delay_sec",
+         {offset_of(&CloudFileSystemOptions::cloud_file_deletion_delay),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone,
+          [](const ConfigOptions&, const std::string& name,
+             const std::string& value, void* addr) {
+            auto* opt =
+                static_cast<std::optional<std::chrono::seconds>*>(addr);
+            if (value.empty() || value == "none" || value == "null") {
+              opt->reset();
+              return Status::OK();
+            }
+            try {
+              uint64_t sec = ParseUint64(value);
+              *opt = std::chrono::seconds(sec);
+              return Status::OK();
+            } catch (const std::exception& e) {
+              return Status::InvalidArgument(name,
+                                             std::string(" bad value: ") +
+                                                 e.what());
+            }
+          },
+          [](const ConfigOptions&, const std::string&,
+             const void* addr, std::string* value) {
+            auto* opt =
+                static_cast<const std::optional<std::chrono::seconds>*>(addr);
+            if (opt->has_value()) {
+              *value = std::to_string(opt->value().count());
+            } else {
+              value->clear();
+            }
+            return Status::OK();
+          },
+          [](const ConfigOptions&, const std::string&,
+             const void* addr1, const void* addr2, std::string* /*mismatch*/) {
+            auto* a =
+                static_cast<const std::optional<std::chrono::seconds>*>(addr1);
+            auto* b =
+                static_cast<const std::optional<std::chrono::seconds>*>(addr2);
+            return *a == *b;
+          }}},
         {"purger_periodicity_ms",
          {offset_of(&CloudFileSystemOptions::purger_periodicity_millis),
           OptionType::kUInt64T}},
+        {"enable_file_lifecycle_logging",
+         {offset_of(&CloudFileSystemOptions::enable_file_lifecycle_logging),
+          OptionType::kBoolean}},
+        {"file_lifecycle_log_path",
+         {offset_of(&CloudFileSystemOptions::file_lifecycle_log_path),
+          OptionType::kString}},
+        {"file_lifecycle_snapshot_period_sec",
+         {offset_of(
+              &CloudFileSystemOptions::file_lifecycle_snapshot_period_sec),
+          OptionType::kUInt64T}},
+        {"file_lifecycle_verbose",
+         {offset_of(&CloudFileSystemOptions::file_lifecycle_verbose),
+          OptionType::kBoolean}},
 
         {"provider",
          {offset_of(&CloudFileSystemOptions::storage_provider),
@@ -552,18 +616,19 @@ Status CloudFileSystemEnv::CreateFromString(
   }
   ConfigOptions copy = config_options;
   std::unique_ptr<FileSystem> fs;
+  std::unique_ptr<Env> prep_env;
   copy.invoke_prepare_options = false;  // Prepare here, not there
   s = ObjectRegistry::NewInstance()->NewUniqueObject<FileSystem>(id, &fs);
   if (s.ok()) {
     auto* cfs = dynamic_cast<CloudFileSystemImpl*>(fs.get());
     assert(cfs);
+    prep_env = NewCompositeEnvFromFs(cfs, copy.env);
+    copy.env = prep_env.get();
     if (!options.empty()) {
       s = cfs->ConfigureFromMap(copy, options);
     }
     if (s.ok() && config_options.invoke_prepare_options) {
-      auto env = NewCompositeEnvFromFs(cfs, copy.env);
       copy.invoke_prepare_options = config_options.invoke_prepare_options;
-      copy.env = env.get();
       s = cfs->PrepareOptions(copy);
       if (s.ok()) {
         Options tmp;
@@ -606,6 +671,7 @@ Status CloudFileSystemEnv::CreateFromString(
   }
   ConfigOptions copy = config_options;
   std::unique_ptr<FileSystem> fs;
+  std::unique_ptr<Env> prep_env;
   copy.invoke_prepare_options = false;  // Prepare here, not there
   s = ObjectRegistry::NewInstance()->NewUniqueObject<FileSystem>(id, &fs);
   if (s.ok()) {
@@ -613,13 +679,13 @@ Status CloudFileSystemEnv::CreateFromString(
     assert(cfs);
     auto copts = cfs->GetOptions<CloudFileSystemOptions>();
     *copts = cloud_options;
+    prep_env = NewCompositeEnvFromFs(cfs, copy.env);
+    copy.env = prep_env.get();
     if (!options.empty()) {
       s = cfs->ConfigureFromMap(copy, options);
     }
     if (s.ok() && config_options.invoke_prepare_options) {
-      auto env = NewCompositeEnvFromFs(cfs, copy.env);
       copy.invoke_prepare_options = config_options.invoke_prepare_options;
-      copy.env = env.get();
       s = cfs->PrepareOptions(copy);
       if (s.ok()) {
         Options tmp;

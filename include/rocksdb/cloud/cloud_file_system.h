@@ -388,6 +388,26 @@ class CloudFileSystemOptions {
   // Default: 1 hour
   std::optional<std::chrono::seconds> cloud_file_deletion_delay;
 
+  // If true, emit JSONL lifecycle logs describing SST/manifest visibility,
+  // compaction/flush lifecycle, and deletion actions.
+  // Default: false
+  bool enable_file_lifecycle_logging;
+
+  // Path to the JSONL lifecycle log. If empty and logging is enabled, a default
+  // path under db_log_dir (or dbname if db_log_dir is empty) will be used.
+  // Default: ""
+  std::string file_lifecycle_log_path;
+
+  // Period (in seconds) for live file snapshots into the lifecycle log.
+  // 0 disables periodic snapshots.
+  // Default: 60
+  uint64_t file_lifecycle_snapshot_period_sec;
+
+  // If true, emit verbose lifecycle events for file remaps, opens, and cloud
+  // operations (list/exists/read/write).
+  // Default: false
+  bool file_lifecycle_verbose;
+
   // Type info map for this class.
   static const std::unordered_map<std::string, OptionTypeInfo>
       cloud_fs_option_type_info;
@@ -411,7 +431,11 @@ class CloudFileSystemOptions {
       bool _roll_cloud_manifest_on_open = true,
       std::string _cookie_on_open = "", std::string _new_cookie_on_open = "",
       bool _delete_cloud_invisible_files_on_open = true,
-      std::chrono::seconds _cloud_file_deletion_delay = std::chrono::hours(1))
+      std::chrono::seconds _cloud_file_deletion_delay = std::chrono::hours(1),
+      bool _enable_file_lifecycle_logging = false,
+      std::string _file_lifecycle_log_path = "",
+      uint64_t _file_lifecycle_snapshot_period_sec = 60,
+      bool _file_lifecycle_verbose = false)
       : log_type(_log_type),
         keep_local_sst_files(_keep_local_sst_files),
         keep_local_log_files(_keep_local_log_files),
@@ -437,7 +461,12 @@ class CloudFileSystemOptions {
         new_cookie_on_open(_new_cookie_on_open),
         delete_cloud_invisible_files_on_open(
             _delete_cloud_invisible_files_on_open),
-        cloud_file_deletion_delay(_cloud_file_deletion_delay) {
+        cloud_file_deletion_delay(_cloud_file_deletion_delay),
+        enable_file_lifecycle_logging(_enable_file_lifecycle_logging),
+        file_lifecycle_log_path(std::move(_file_lifecycle_log_path)),
+        file_lifecycle_snapshot_period_sec(
+            _file_lifecycle_snapshot_period_sec),
+        file_lifecycle_verbose(_file_lifecycle_verbose) {
     (void)_cloud_type;
   }
 
