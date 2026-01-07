@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "cloud/cloud_manifest.h"
+#include "cloud/filename.h"
 #include "rocksdb/cloud/cloud_file_system_impl.h"
 #include "rocksdb/metadata.h"
 
@@ -26,6 +27,15 @@ const char* TemperatureToString(Temperature temp) {
       break;
   }
   return "unknown";
+}
+
+std::string GetEpochSuffix(const std::string& name) {
+  auto base = basename(name);
+  auto last_dash = base.rfind('-');
+  if (last_dash == std::string::npos) {
+    return "";
+  }
+  return base.substr(last_dash + 1);
 }
 }  // namespace
 
@@ -98,11 +108,19 @@ void FileLifecycleTracker::LogSnapshot() {
 
   for (const auto& file : live_files) {
     logger_->LogEvent("snapshot_file", [&](FileLifecycleLogger::JsonWriter* w) {
+      std::string state = "live";
+      if (!epoch.empty()) {
+        auto suffix = GetEpochSuffix(file.name);
+        if (!suffix.empty() && suffix != epoch) {
+          state = "invisible";
+        }
+      }
       w->AddUint64("snapshot_id", snapshot_id);
       w->AddUint64("file_number", file.file_number);
       w->AddString("file_name", file.name);
       w->AddString("relative_filename", file.relative_filename);
       w->AddString("db_path", file.db_path);
+      w->AddString("file_state", state);
       w->AddUint64("level", file.level);
       w->AddUint64("size_bytes", file.size);
       w->AddUint64("smallest_seqno", file.smallest_seqno);
