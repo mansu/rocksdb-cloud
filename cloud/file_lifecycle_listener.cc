@@ -174,10 +174,17 @@ void FileLifecycleListener::OnTableFileCreated(
   }
   logger_->LogEvent("table_file_created",
                     [&](FileLifecycleLogger::JsonWriter* w) {
+                      w->AddString("db_name", info.db_name);
                       w->AddString("cf_name", info.cf_name);
                       w->AddString("file_path", info.file_path);
                       w->AddUint64("job_id", info.job_id);
                       w->AddUint64("file_size", info.file_size);
+                      w->AddUint64("num_entries",
+                                   info.table_properties.num_entries);
+                      w->AddUint64("num_deletions",
+                                   info.table_properties.num_deletions);
+                      w->AddUint64("data_size",
+                                   info.table_properties.data_size);
                       w->AddString("status", info.status.ToString());
                       w->AddString("reason",
                                    TableFileCreationReasonToString(
@@ -196,6 +203,7 @@ void FileLifecycleListener::OnTableFileDeleted(
   }
   logger_->LogEvent("table_file_deleted",
                     [&](FileLifecycleLogger::JsonWriter* w) {
+                      w->AddString("db_name", info.db_name);
                       w->AddString("file_path", info.file_path);
                       w->AddUint64("job_id", info.job_id);
                       w->AddString("status", info.status.ToString());
