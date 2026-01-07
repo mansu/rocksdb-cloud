@@ -54,8 +54,7 @@ void CloudFileSystemImpl::Purger() {
 
     // delete obsolete paths
     for (const auto& p : to_be_deleted_paths) {
-      // TODO more unit tests before we delete data
-      // st = DeleteCloudObject(GetDestBucketName(), p);
+      st = GetStorageProvider()->DeleteCloudObject(GetDestBucketName(), p);
       Log(InfoLogLevel::WARN_LEVEL, info_log_,
           "[pg] bucket prefix %s obsolete dbpath %s deleted. %s",
           GetDestBucketName().c_str(), p.c_str(), st.ToString().c_str());
