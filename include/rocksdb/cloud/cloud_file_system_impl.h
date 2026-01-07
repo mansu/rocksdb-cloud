@@ -242,6 +242,8 @@ class CloudFileSystemImpl : public CloudFileSystem {
   CloudManifest* GetCloudManifest() override { return cloud_manifest_.get(); }
 
   IOStatus DeleteCloudFileFromDest(const std::string& fname) override;
+  IOStatus DeleteCloudFileFromDestInternal(const std::string& fname,
+                                           const char* reason);
   IOStatus CopyLocalFileToDest(const std::string& local_name,
                                const std::string& cloud_name,
                                const PutObjectOptions& options = {}) override;

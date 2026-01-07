@@ -45,6 +45,27 @@ const char* RocksDBFileTypeToString(RocksDBFileType type) {
   }
   return "unknown";
 }
+
+std::string GetEpochSuffixFromName(const std::string& name) {
+  auto base = basename(name);
+  auto last_dash = base.rfind('-');
+  if (last_dash == std::string::npos) {
+    return "";
+  }
+  return base.substr(last_dash + 1);
+}
+
+void AddDeleteFileContext(FileLifecycleLogger::JsonWriter* w,
+                          const std::string& name) {
+  auto logical_name = RemoveEpoch(basename(name));
+  auto epoch_suffix = GetEpochSuffixFromName(name);
+  auto file_type = GetFileType(name);
+  w->AddString("logical_name", logical_name);
+  if (!epoch_suffix.empty()) {
+    w->AddString("epoch_suffix", epoch_suffix);
+  }
+  w->AddString("file_type", RocksDBFileTypeToString(file_type));
+}
 }  // namespace
 
 CloudFileSystemImpl::CloudFileSystemImpl(
@@ -1116,6 +1137,8 @@ IOStatus CloudFileSystemImpl::DeleteFile(const std::string& logical_fname,
                                     w->AddString(
                                         "file_type",
                                         RocksDBFileTypeToString(file_type));
+                                    w->AddString("reason", "obsolete");
+                                    AddDeleteFileContext(w, fname);
                                     w->AddString("status", st.ToString());
                                   });
     }
@@ -1191,6 +1214,11 @@ IOStatus CloudFileSystemImpl::CopyLocalFileToDest(
 
 IOStatus CloudFileSystemImpl::DeleteCloudFileFromDest(
     const std::string& fname) {
+  return DeleteCloudFileFromDestInternal(fname, "obsolete");
+}
+
+IOStatus CloudFileSystemImpl::DeleteCloudFileFromDestInternal(
+    const std::string& fname, const char* reason) {
   assert(HasDestBucket());
   auto base = basename(fname);
   auto path = GetDestObjectPath() + pathsep + base;
@@ -1202,6 +1230,8 @@ IOStatus CloudFileSystemImpl::DeleteCloudFileFromDest(
                                   [&](FileLifecycleLogger::JsonWriter* w) {
                                     w->AddString("file_name", base);
                                     w->AddString("cloud_path", path);
+                                    w->AddString("reason", reason);
+                                    AddDeleteFileContext(w, base);
                                     w->AddString("status", st.ToString());
                                   });
     }
@@ -1212,6 +1242,8 @@ IOStatus CloudFileSystemImpl::DeleteCloudFileFromDest(
                                 [&](FileLifecycleLogger::JsonWriter* w) {
                                   w->AddString("file_name", base);
                                   w->AddString("cloud_path", path);
+                                  w->AddString("reason", reason);
+                                  AddDeleteFileContext(w, base);
                                   if (cloud_fs_options.cloud_file_deletion_delay) {
                                     w->AddInt64(
                                         "delay_sec",
@@ -1401,6 +1433,7 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
             [&](FileLifecycleLogger::JsonWriter* w) {
               w->AddString("file_name", fname);
               w->AddString("reason", reason);
+              AddDeleteFileContext(w, fname);
               w->AddStringList("active_cookies", active_cookies);
             });
       }
@@ -1408,7 +1441,7 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
           "DeleteCloudInvisibleFiles deleting %s from destination bucket",
           fname.c_str());
-      DeleteCloudFileFromDest(fname);
+      DeleteCloudFileFromDestInternal(fname, "invisible");
     }
   }
   return s;
@@ -1437,6 +1470,7 @@ IOStatus CloudFileSystemImpl::DeleteLocalInvisibleFiles(
             [&](FileLifecycleLogger::JsonWriter* w) {
               w->AddString("file_name", fname);
               w->AddString("reason", reason);
+              AddDeleteFileContext(w, fname);
               w->AddStringList("active_cookies", active_cookies);
             });
       }
