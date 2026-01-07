@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <thread>
 
 #include "rocksdb/cloud/cloud_file_system.h"
@@ -436,6 +437,12 @@ class CloudFileSystemImpl : public CloudFileSystem {
                        const std::string& fname,
                        std::string* reason) const;
 
+  void UpdateInvisibleTracking(const std::string& scope,
+                               const std::string& fname, bool invisible,
+                               const std::string& reason,
+                               const std::vector<std::string>& active_cookies,
+                               std::unordered_set<std::string>* cache);
+
   void log(InfoLogLevel level, const std::string& fname,
            const std::string& msg);
 
@@ -460,6 +467,9 @@ class CloudFileSystemImpl : public CloudFileSystem {
   // scratch space in local dir
   static constexpr const char* SCRATCH_LOCAL_DIR = "/tmp";
   std::shared_ptr<CloudFileDeletionScheduler> cloud_file_deletion_scheduler_;
+  mutable std::mutex invisible_files_mu_;
+  std::unordered_set<std::string> invisible_cloud_files_;
+  std::unordered_set<std::string> invisible_local_files_;
   std::shared_ptr<FileLifecycleLogger> lifecycle_logger_;
 };
 

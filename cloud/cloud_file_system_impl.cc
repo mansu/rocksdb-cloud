@@ -1426,7 +1426,10 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
 
   for (auto& fname : pathnames) {
     std::string reason;
-    if (IsFileInvisible(active_cookies, fname, &reason)) {
+    bool invisible = IsFileInvisible(active_cookies, fname, &reason);
+    UpdateInvisibleTracking("cloud", fname, invisible, reason, active_cookies,
+                            &invisible_cloud_files_);
+    if (invisible) {
       if (lifecycle_logger_) {
         lifecycle_logger_->LogEvent(
             "cloud_invisible_cloud_delete",
@@ -1463,7 +1466,10 @@ IOStatus CloudFileSystemImpl::DeleteLocalInvisibleFiles(
   }
   for (auto& fname : children) {
     std::string reason;
-    if (IsFileInvisible(active_cookies, fname, &reason)) {
+    bool invisible = IsFileInvisible(active_cookies, fname, &reason);
+    UpdateInvisibleTracking("local", fname, invisible, reason, active_cookies,
+                            &invisible_local_files_);
+    if (invisible) {
       if (lifecycle_logger_) {
         lifecycle_logger_->LogEvent(
             "cloud_invisible_local_delete",
@@ -1522,6 +1528,49 @@ bool CloudFileSystemImpl::IsFileInvisible(
     }
   }
   return false;
+}
+
+void CloudFileSystemImpl::UpdateInvisibleTracking(
+    const std::string& scope, const std::string& fname, bool invisible,
+    const std::string& reason, const std::vector<std::string>& active_cookies,
+    std::unordered_set<std::string>* cache) {
+  if (!lifecycle_logger_ || cache == nullptr) {
+    return;
+  }
+  bool emit_marked = false;
+  bool emit_unmarked = false;
+  {
+    std::lock_guard<std::mutex> lock(invisible_files_mu_);
+    bool was_invisible = cache->find(fname) != cache->end();
+    if (invisible && !was_invisible) {
+      cache->insert(fname);
+      emit_marked = true;
+    } else if (!invisible && was_invisible) {
+      cache->erase(fname);
+      emit_unmarked = true;
+    }
+  }
+  if (emit_marked) {
+    lifecycle_logger_->LogEvent("file_invisible_marked",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("scope", scope);
+                                  w->AddString("file_name", fname);
+                                  w->AddString("reason", reason);
+                                  AddDeleteFileContext(w, fname);
+                                  w->AddStringList("active_cookies",
+                                                   active_cookies);
+                                });
+  } else if (emit_unmarked) {
+    lifecycle_logger_->LogEvent("file_invisible_unmarked",
+                                [&](FileLifecycleLogger::JsonWriter* w) {
+                                  w->AddString("scope", scope);
+                                  w->AddString("file_name", fname);
+                                  w->AddString("reason", "visible");
+                                  AddDeleteFileContext(w, fname);
+                                  w->AddStringList("active_cookies",
+                                                   active_cookies);
+                                });
+  }
 }
 
 IOStatus CloudFileSystemImpl::CreateNewIdentityFile(
