@@ -160,6 +160,7 @@ IOStatus CloudStorageWritableFileImpl::Close(const IOOptions& opts,
   if (local_file_ == nullptr) {  // already closed
     return status_;
   }
+  uint64_t start_us = Env::Default()->NowMicros();
   Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
       "[%s] CloudWritableFile closing %s", Name(), fname_.c_str());
   assert(status_.ok());
@@ -196,6 +197,10 @@ IOStatus CloudStorageWritableFileImpl::Close(const IOOptions& opts,
     Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
         "[%s] CloudWritableFile closed file %s", Name(), fname_.c_str());
   }
+  uint64_t elapsed_us = Env::Default()->NowMicros() - start_us;
+  Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
+      "[%s] CloudWritableFile close done local=%s status=%s elapsed_us=%" PRIu64,
+      Name(), fname_.c_str(), status_.ToString().c_str(), elapsed_us);
   return IOStatus::OK();
 }
 
@@ -206,15 +211,28 @@ IOStatus CloudStorageWritableFileImpl::Sync(const IOOptions& opts,
     return status_;
   }
   assert(status_.ok());
+  uint64_t start_us = Env::Default()->NowMicros();
+  Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
+      "[%s] CloudWritableFile Sync start local=%s cloud=%s manifest=%d tmp=%s",
+      Name(), fname_.c_str(), cloud_fname_.c_str(), is_manifest_,
+      tmp_file_.empty() ? "<none>" : tmp_file_.c_str());
 
   // sync local file
   auto stat = local_file_->Sync(opts, dbg);
+  if (!stat.ok()) {
+    Log(InfoLogLevel::ERROR_LEVEL, cfs_->GetLogger(),
+        "[%s] CloudWritableFile Sync local error %s status=%s", Name(),
+        fname_.c_str(), stat.ToString().c_str());
+  }
 
   if (stat.ok() && !tmp_file_.empty()) {
     assert(is_manifest_);
     // We are writing to the temporary file. On a first sync we need to rename
     // the file to the real filename.
     stat = cfs_->GetBaseFileSystem()->RenameFile(tmp_file_, fname_, opts, dbg);
+    Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
+        "[%s] CloudWritableFile Sync rename tmp=%s target=%s status=%s",
+        Name(), tmp_file_.c_str(), fname_.c_str(), stat.ToString().c_str());
     // Note: this is not thread safe, but we know that manifest writes happen
     // from the same thread, so we are fine.
     tmp_file_.clear();
@@ -223,6 +241,10 @@ IOStatus CloudStorageWritableFileImpl::Sync(const IOOptions& opts,
   // We copy MANIFEST to cloud on every Sync()
   if (is_manifest_ && stat.ok()) {
     stat = cfs_->CopyLocalFileToDest(fname_, cloud_fname_);
+    Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
+        "[%s] CloudWritableFile Sync copy local=%s cloud=%s status=%s",
+        Name(), fname_.c_str(), cloud_fname_.c_str(),
+        stat.ToString().c_str());
     if (stat.ok()) {
       Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
           "[%s] CloudWritableFile made manifest %s durable to "
@@ -236,6 +258,10 @@ IOStatus CloudStorageWritableFileImpl::Sync(const IOOptions& opts,
           stat.ToString().c_str());
     }
   }
+  uint64_t elapsed_us = Env::Default()->NowMicros() - start_us;
+  Log(InfoLogLevel::DEBUG_LEVEL, cfs_->GetLogger(),
+      "[%s] CloudWritableFile Sync done local=%s status=%s elapsed_us=%" PRIu64,
+      Name(), fname_.c_str(), stat.ToString().c_str(), elapsed_us);
   return stat;
 }
 

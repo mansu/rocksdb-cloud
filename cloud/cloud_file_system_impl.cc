@@ -4,6 +4,7 @@
 #include "rocksdb/cloud/cloud_file_system_impl.h"
 
 #include <cinttypes>
+#include <cstdio>
 
 #include "cloud/cloud_log_controller_impl.h"
 #include "cloud/file_lifecycle_logger.h"
@@ -621,6 +622,12 @@ IOStatus CloudFileSystemImpl::NewWritableFile(
   IOStatus s;
   std::string source = "local";
   if (HasDestBucket() && (sstfile || identity || manifest)) {
+    if (manifest) {
+      Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
+          "[%s] NewWritableFile manifest local=%s cloud=%s bucket=%s",
+          Name(), fname.c_str(), destname(fname).c_str(),
+          GetDestBucketName().c_str());
+    }
     std::unique_ptr<CloudStorageWritableFile> f;
     s = GetStorageProvider()->NewCloudWritableFile(
         fname, GetDestBucketName(), destname(fname), file_opts, &f, dbg);
@@ -1726,6 +1733,8 @@ IOStatus CloudFileSystemImpl::CreateNewIdentityFile(
 IOStatus CloudFileSystemImpl::WriteCloudManifest(
     CloudManifest* manifest, const std::string& fname) const {
   const auto& local_fs = GetBaseFileSystem();
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[cloud_fs_impl] WriteCloudManifest: path=%s", fname.c_str());
   // Write to tmp file and atomically rename later. This helps if we crash
   // mid-write :)
   auto tmp_fname = fname + ".tmp";
@@ -1737,6 +1746,24 @@ IOStatus CloudFileSystemImpl::WriteCloudManifest(
   }
   if (s.ok()) {
     s = local_fs->RenameFile(tmp_fname, fname, IOOptions(), nullptr /*dbg*/);
+  }
+  if (s.ok()) {
+    uint64_t file_size = 0;
+    auto size_status =
+        local_fs->GetFileSize(fname, IOOptions(), &file_size, nullptr /*dbg*/);
+    if (size_status.ok()) {
+      Log(InfoLogLevel::INFO_LEVEL, info_log_,
+          "[cloud_fs_impl] WriteCloudManifest: path=%s size=%" PRIu64,
+          fname.c_str(), file_size);
+    } else {
+      Log(InfoLogLevel::INFO_LEVEL, info_log_,
+          "[cloud_fs_impl] WriteCloudManifest: path=%s size_error=%s",
+          fname.c_str(), size_status.ToString().c_str());
+    }
+  } else {
+    Log(InfoLogLevel::INFO_LEVEL, info_log_,
+        "[cloud_fs_impl] WriteCloudManifest: path=%s status=%s", fname.c_str(),
+        s.ToString().c_str());
   }
   return s;
 }
@@ -2628,11 +2655,17 @@ IOStatus CloudFileSystemImpl::FetchManifest(const std::string& local_dbname,
 
 IOStatus CloudFileSystemImpl::CreateCloudManifest(
     const std::string& local_dbname, const std::string& cookie) {
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[cloud_fs_impl] CreateCloudManifest: local_dbname=%s cookie=%s",
+      local_dbname.c_str(), cookie.c_str());
   // No cloud manifest, create an empty one
   std::unique_ptr<CloudManifest> manifest;
   CloudManifest::CreateForEmptyDatabase(GenerateNewEpochId(), &manifest);
   auto st = WriteCloudManifest(manifest.get(),
                                MakeCloudManifestFile(local_dbname, cookie));
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[cloud_fs_impl] CreateCloudManifest: write status %s",
+      st.ToString().c_str());
   if (st.ok()) {
     st = LoadLocalCloudManifest(local_dbname, cookie);
   }
@@ -2687,10 +2720,15 @@ IOStatus CloudFileSystemImpl::UploadManifest(const std::string& local_dbname,
         "Dest bucket has to be specified when uploading manifest files");
   }
 
+  uint64_t start_us = Env::Default()->NowMicros();
   auto local_file = ManifestFileWithEpoch(local_dbname, epoch);
   auto object = ManifestFileWithEpoch(GetDestObjectPath(), epoch);
   auto st = GetStorageProvider()->PutCloudObject(local_file,
                                                  GetDestBucketName(), object);
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[cloud] UploadManifest: object=%s status=%s elapsed_us=%" PRIu64,
+      object.c_str(), st.ToString().c_str(),
+      Env::Default()->NowMicros() - start_us);
   if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
     lifecycle_logger_->LogEvent("cloud_put_manifest",
                                 [&](FileLifecycleLogger::JsonWriter* w) {
@@ -2714,10 +2752,15 @@ IOStatus CloudFileSystemImpl::UploadCloudManifest(
   }
   // upload the cloud manifest file corresponds to cookie (i.e.,
   // CLOUDMANIFEST-cookie)
+  uint64_t start_us = Env::Default()->NowMicros();
   auto local_file = MakeCloudManifestFile(local_dbname, cookie);
   auto object = MakeCloudManifestFile(GetDestObjectPath(), cookie);
   auto st = GetStorageProvider()->PutCloudObject(local_file,
                                                  GetDestBucketName(), object);
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[cloud] UploadCloudManifest: object=%s status=%s elapsed_us=%" PRIu64,
+      object.c_str(), st.ToString().c_str(),
+      Env::Default()->NowMicros() - start_us);
   if (lifecycle_logger_ && cloud_fs_options.file_lifecycle_verbose) {
     lifecycle_logger_->LogEvent("cloud_put_cloud_manifest",
                                 [&](FileLifecycleLogger::JsonWriter* w) {
@@ -2993,6 +3036,26 @@ Status CloudFileSystemImpl::PrepareOptions(const ConfigOptions& options) {
   status = CheckValidity();
   if (!status.ok()) {
     return status;
+  }
+  if (info_log_ != nullptr) {
+    cloud_fs_options.Dump(info_log_.get());
+  } else {
+    std::fprintf(
+        stderr,
+        "[cloud] COptions: src_bucket=%s src_object=%s dest_bucket=%s "
+        "dest_object=%s roll_cloud_manifest_on_open=%d cookie_on_open=%s "
+        "new_cookie_on_open=%s force_cookie_on_open=%d "
+        "delete_cloud_invisible_files_on_open=%d resync_on_open=%d\n",
+        cloud_fs_options.src_bucket.GetBucketName().c_str(),
+        cloud_fs_options.src_bucket.GetObjectPath().c_str(),
+        cloud_fs_options.dest_bucket.GetBucketName().c_str(),
+        cloud_fs_options.dest_bucket.GetObjectPath().c_str(),
+        cloud_fs_options.roll_cloud_manifest_on_open,
+        cloud_fs_options.cookie_on_open.c_str(),
+        cloud_fs_options.new_cookie_on_open.c_str(),
+        cloud_fs_options.force_cookie_on_open,
+        cloud_fs_options.delete_cloud_invisible_files_on_open,
+        cloud_fs_options.resync_on_open);
   }
   // start the purge thread only if there is a destination bucket
   if (cloud_fs_options.dest_bucket.IsValid() && cloud_fs_options.run_purger) {

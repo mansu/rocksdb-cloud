@@ -247,12 +247,19 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
 
   DB* db = nullptr;
   std::string dbid;
+  uint64_t open_start_us = Env::Default()->NowMicros();
+  Log(InfoLogLevel::INFO_LEVEL, options.info_log,
+      "[cloud] DB::Open start: read_only=%d local_dbname=%s", read_only,
+      local_dbname.c_str());
   if (read_only) {
     st = DB::OpenForReadOnly(options, local_dbname, column_families, handles,
                              &db);
   } else {
     st = DB::Open(options, local_dbname, column_families, handles, &db);
   }
+  Log(InfoLogLevel::INFO_LEVEL, options.info_log,
+      "[cloud] DB::Open done: status=%s elapsed_us=%" PRIu64, st.ToString().c_str(),
+      Env::Default()->NowMicros() - open_start_us);
   if (!st.ok() && lifecycle_logger) {
     lifecycle_logger->LogEvent(
         "db_open_failed", [&](FileLifecycleLogger::JsonWriter* w) {
@@ -260,13 +267,44 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
         });
   }
 
-  if (new_db && st.ok() && cfs->HasDestBucket() &&
-      cfs->GetCloudFileSystemOptions().roll_cloud_manifest_on_open) {
+  const auto& cfs_opts = cfs->GetCloudFileSystemOptions();
+  bool should_upload_cloud_manifest =
+      new_db && st.ok() && cfs->HasDestBucket() &&
+      cfs_opts.roll_cloud_manifest_on_open;
+  if (lifecycle_logger) {
+    lifecycle_logger->LogEvent(
+        "cloud_manifest_upload_decision",
+        [&](FileLifecycleLogger::JsonWriter* w) {
+          w->AddBool("new_db", new_db);
+          w->AddBool("read_only", read_only);
+          w->AddBool("status_ok", st.ok());
+          w->AddBool("has_dest_bucket", cfs->HasDestBucket());
+          w->AddBool("roll_cloud_manifest_on_open",
+                     cfs_opts.roll_cloud_manifest_on_open);
+        });
+  }
+  Log(InfoLogLevel::INFO_LEVEL, options.info_log,
+      "[cloud] UploadCloudManifest decision: new_db=%d read_only=%d status=%s "
+      "has_dest_bucket=%d roll_cloud_manifest_on_open=%d",
+      new_db, read_only, st.ToString().c_str(), cfs->HasDestBucket(),
+      cfs_opts.roll_cloud_manifest_on_open);
+
+  if (should_upload_cloud_manifest) {
     // This is a new database, upload the CLOUDMANIFEST after all MANIFEST file
     // was already uploaded. It is at this point we consider the database
     // committed in the cloud.
-    st = cfs->UploadCloudManifest(
-        local_dbname, cfs->GetCloudFileSystemOptions().new_cookie_on_open);
+    st = cfs->UploadCloudManifest(local_dbname, cfs_opts.new_cookie_on_open);
+    if (!st.ok()) {
+      Log(InfoLogLevel::ERROR_LEVEL, options.info_log,
+          "[cloud] UploadCloudManifest failed: %s", st.ToString().c_str());
+      if (lifecycle_logger) {
+        lifecycle_logger->LogEvent(
+            "cloud_manifest_upload_failed",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("status", st.ToString());
+            });
+      }
+    }
   }
 
   // now that the database is opened, all file sizes have been verified and we
@@ -289,11 +327,11 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
     }
     std::unique_ptr<FileLifecycleTracker> lifecycle_tracker;
     if (lifecycle_logger && cfs_impl) {
-      const auto& cfs_opts = cfs_impl->GetCloudFileSystemOptions();
-      if (cfs_opts.file_lifecycle_snapshot_period_sec > 0) {
+      const auto& cfs_opts_impl = cfs_impl->GetCloudFileSystemOptions();
+      if (cfs_opts_impl.file_lifecycle_snapshot_period_sec > 0) {
         lifecycle_tracker.reset(new FileLifecycleTracker(
             db, cfs_impl, lifecycle_logger, options.env,
-            cfs_opts.file_lifecycle_snapshot_period_sec));
+            cfs_opts_impl.file_lifecycle_snapshot_period_sec));
         lifecycle_tracker->Start();
       }
     }

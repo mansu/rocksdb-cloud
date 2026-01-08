@@ -1035,15 +1035,27 @@ IOStatus S3StorageProvider::DoPutCloudObject(const std::string& local_file,
     putRequest.SetBody(inputData);
     SetEncryptionParameters(cfs_->GetCloudFileSystemOptions(), putRequest);
 
+    Log(InfoLogLevel::INFO_LEVEL, cfs_->GetLogger(),
+        "[s3] PutCloudObject start %s/%s local_file=%s size %" PRIu64,
+        bucket_name.c_str(), object_path.c_str(), local_file.c_str(), file_size);
     auto outcome = s3client_->PutCloudObject(putRequest, file_size);
     if (!outcome.IsSuccess()) {
       const auto& error = outcome.GetError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
       Log(InfoLogLevel::ERROR_LEVEL, cfs_->GetLogger(),
+          "[s3] PutCloudObject %s/%s ERROR type=%s http=%d request_id=%s msg=%s",
+          bucket_name.c_str(), object_path.c_str(),
+          error.GetExceptionName().c_str(),
+          static_cast<int>(error.GetResponseCode()),
+          error.GetRequestId().c_str(), errmsg.c_str());
+      Log(InfoLogLevel::ERROR_LEVEL, cfs_->GetLogger(),
           "[s3] PutCloudObject %s/%s, size %" PRIu64 ", ERROR %s",
           bucket_name.c_str(), object_path.c_str(), file_size, errmsg.c_str());
       return IOStatus::IOError(local_file, errmsg);
     }
+    Log(InfoLogLevel::INFO_LEVEL, cfs_->GetLogger(),
+        "[s3] PutCloudObject success %s/%s request_id=%s", bucket_name.c_str(),
+        object_path.c_str(), outcome.GetResult().GetRequestId().c_str());
   }
   Log(InfoLogLevel::INFO_LEVEL, cfs_->GetLogger(),
       "[s3] PutCloudObject %s/%s, size %" PRIu64 ", OK", bucket_name.c_str(),
