@@ -369,6 +369,11 @@ class CloudFileSystemOptions {
   // Default: "", means new cloud manifest file won't have cookie suffix
   std::string new_cookie_on_open;
 
+  // If true, require a non-empty cookie_on_open. If cookie_on_open is empty and
+  // new_cookie_on_open is set, it will be used as cookie_on_open.
+  // Default: false
+  bool force_cookie_on_open;
+
   // Experimental option!
   // - If true, both cloud and local invisible files (i.e, CLOUDMANIFEST,
   // MANIFEST and SST files which don't belong to current epoch) will be deleted
@@ -430,6 +435,7 @@ class CloudFileSystemOptions {
       bool _use_direct_io_for_cloud_download = false,
       bool _roll_cloud_manifest_on_open = true,
       std::string _cookie_on_open = "", std::string _new_cookie_on_open = "",
+      bool _force_cookie_on_open = false,
       bool _delete_cloud_invisible_files_on_open = true,
       std::chrono::seconds _cloud_file_deletion_delay = std::chrono::hours(1),
       bool _enable_file_lifecycle_logging = false,
@@ -459,6 +465,7 @@ class CloudFileSystemOptions {
         roll_cloud_manifest_on_open(_roll_cloud_manifest_on_open),
         cookie_on_open(std::move(_cookie_on_open)),
         new_cookie_on_open(_new_cookie_on_open),
+        force_cookie_on_open(_force_cookie_on_open),
         delete_cloud_invisible_files_on_open(
             _delete_cloud_invisible_files_on_open),
         cloud_file_deletion_delay(_cloud_file_deletion_delay),

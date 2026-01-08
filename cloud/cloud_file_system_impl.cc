@@ -1479,6 +1479,17 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
   for (auto& fname : pathnames) {
     std::string reason;
     bool invisible = IsFileInvisible(active_cookies, fname, &reason);
+    if (lifecycle_logger_ && IsCloudManifestFile(fname)) {
+      lifecycle_logger_->LogEvent(
+          "cloud_manifest_visibility_check",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("file_name", fname);
+            w->AddString("cookie", GetCookie(fname));
+            w->AddBool("invisible", invisible);
+            w->AddString("reason", reason);
+            w->AddStringList("active_cookies", active_cookies);
+          });
+    }
     UpdateInvisibleTracking("cloud", fname, invisible, reason, active_cookies,
                             &invisible_cloud_files_);
     if (invisible) {
@@ -2246,6 +2257,20 @@ IOStatus CloudFileSystemImpl::PreloadCloudManifest(
 
 IOStatus CloudFileSystemImpl::LoadCloudManifest(const std::string& local_dbname,
                                                 bool read_only) {
+  if (cloud_fs_options.force_cookie_on_open &&
+      cloud_fs_options.cookie_on_open.empty()) {
+    if (!cloud_fs_options.new_cookie_on_open.empty()) {
+      cloud_fs_options.cookie_on_open = cloud_fs_options.new_cookie_on_open;
+      Log(InfoLogLevel::INFO_LEVEL, info_log_,
+          "[cloud_fs_impl] force_cookie_on_open enabled; using "
+          "new_cookie_on_open=%s as cookie_on_open",
+          cloud_fs_options.new_cookie_on_open.c_str());
+    } else {
+      return IOStatus::InvalidArgument(
+          "force_cookie_on_open requires cookie_on_open or new_cookie_on_open");
+    }
+  }
+
   // Init cloud manifest
   auto st = FetchCloudManifest(local_dbname);
   if (st.ok()) {
