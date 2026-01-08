@@ -92,6 +92,30 @@ CloudFileSystemImpl::~CloudFileSystemImpl() {
   cloud_fs_options.storage_provider.reset();
 }
 
+void CloudFileSystemImpl::SetFileLifecycleLogger(
+    std::shared_ptr<FileLifecycleLogger> logger) {
+  lifecycle_logger_ = std::move(logger);
+  if (cloud_file_deletion_scheduler_) {
+    std::weak_ptr<FileLifecycleLogger> logger_wp = lifecycle_logger_;
+    cloud_file_deletion_scheduler_->SetEventCallback(
+        [logger_wp](const std::string& event, const std::string& filename,
+                    const std::string& detail, uint64_t queue_size) {
+          auto lifecycle_logger = logger_wp.lock();
+          if (!lifecycle_logger) {
+            return;
+          }
+          lifecycle_logger->LogEvent(
+              event, [&](FileLifecycleLogger::JsonWriter* w) {
+                w->AddString("file_name", filename);
+                w->AddUint64("queue_size", queue_size);
+                if (!detail.empty()) {
+                  w->AddString("detail", detail);
+                }
+              });
+        });
+  }
+}
+
 IOStatus CloudFileSystemImpl::ExistsCloudObject(const std::string& fname) {
   auto st = IOStatus::NotFound();
   const bool verbose =
@@ -1276,13 +1300,16 @@ IOStatus CloudFileSystemImpl::DeleteCloudFileFromDestInternal(
                                        w->AddString("cloud_path", path);
                                      });
         }
+        uint64_t start_us = Env::Default()->NowMicros();
         auto st = storage_provider->DeleteCloudObject(bucket, path);
+        uint64_t elapsed_us = Env::Default()->NowMicros() - start_us;
         if (lifecycle_logger) {
           lifecycle_logger->LogEvent("cloud_delete_done",
                                      [&](FileLifecycleLogger::JsonWriter* w) {
                                        w->AddString("file_name", base);
                                        w->AddString("cloud_path", path);
                                        w->AddString("status", st.ToString());
+                                       w->AddUint64("elapsed_us", elapsed_us);
                                      });
         }
         if (!st.ok() && !st.IsNotFound()) {
@@ -1424,6 +1451,13 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
   auto s = GetStorageProvider()->ListCloudObjects(
       GetDestBucketName(), GetDestObjectPath(), &pathnames);
   if (!s.ok()) {
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "invisible_cleanup_cloud_list_failed",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("status", s.ToString());
+          });
+    }
     Log(InfoLogLevel::WARN_LEVEL, info_log_,
         "Files in cloud are not scheduled to be deleted since listing cloud "
         "object fails: %s",
@@ -1431,12 +1465,17 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
     return s;
   }
 
+  uint64_t total_objects = pathnames.size();
+  uint64_t invisible_objects = 0;
+  uint64_t deleted_objects = 0;
+  uint64_t delete_failed = 0;
   for (auto& fname : pathnames) {
     std::string reason;
     bool invisible = IsFileInvisible(active_cookies, fname, &reason);
     UpdateInvisibleTracking("cloud", fname, invisible, reason, active_cookies,
                             &invisible_cloud_files_);
     if (invisible) {
+      ++invisible_objects;
       if (lifecycle_logger_) {
         lifecycle_logger_->LogEvent(
             "cloud_invisible_cloud_delete",
@@ -1451,8 +1490,32 @@ IOStatus CloudFileSystemImpl::DeleteCloudInvisibleFiles(
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
           "DeleteCloudInvisibleFiles deleting %s from destination bucket",
           fname.c_str());
-      DeleteCloudFileFromDestInternal(fname, "invisible");
+      auto delete_status = DeleteCloudFileFromDestInternal(fname, "invisible");
+      if (delete_status.ok()) {
+        ++deleted_objects;
+      } else {
+        ++delete_failed;
+        if (lifecycle_logger_) {
+          lifecycle_logger_->LogEvent(
+              "cloud_invisible_cloud_delete_failed",
+              [&](FileLifecycleLogger::JsonWriter* w) {
+                w->AddString("file_name", fname);
+                w->AddString("status", delete_status.ToString());
+                AddDeleteFileContext(w, fname);
+              });
+        }
+      }
     }
+  }
+  if (lifecycle_logger_) {
+    lifecycle_logger_->LogEvent(
+        "invisible_cleanup_cloud_summary",
+        [&](FileLifecycleLogger::JsonWriter* w) {
+          w->AddUint64("total_objects", total_objects);
+          w->AddUint64("invisible_objects", invisible_objects);
+          w->AddUint64("deleted_objects", deleted_objects);
+          w->AddUint64("delete_failed", delete_failed);
+        });
   }
   return s;
 }
@@ -1466,17 +1529,30 @@ IOStatus CloudFileSystemImpl::DeleteLocalInvisibleFiles(
   TEST_SYNC_POINT_CALLBACK(
       "CloudFileSystemImpl::DeleteLocalInvisibleFiles:AfterListLocalFiles", &s);
   if (!s.ok()) {
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "invisible_cleanup_local_skipped",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("status", s.ToString());
+            w->AddString("reason", s.IsNotFound() ? "missing_dir" : "list_failed");
+          });
+    }
     Log(InfoLogLevel::WARN_LEVEL, info_log_,
         "Local files are not deleted since listing local files fails: %s",
         s.ToString().c_str());
     return s;
   }
+  uint64_t total_files = children.size();
+  uint64_t invisible_files = 0;
+  uint64_t deleted_files = 0;
+  uint64_t delete_failed = 0;
   for (auto& fname : children) {
     std::string reason;
     bool invisible = IsFileInvisible(active_cookies, fname, &reason);
     UpdateInvisibleTracking("local", fname, invisible, reason, active_cookies,
                             &invisible_local_files_);
     if (invisible) {
+      ++invisible_files;
       if (lifecycle_logger_) {
         lifecycle_logger_->LogEvent(
             "cloud_invisible_local_delete",
@@ -1491,8 +1567,33 @@ IOStatus CloudFileSystemImpl::DeleteLocalInvisibleFiles(
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
           "DeleteLocalInvisibleFiles deleting file %s from local dir",
           fname.c_str());
-      GetBaseFileSystem()->DeleteFile(dbname + "/" + fname, io_opts, dbg);
+      auto delete_status =
+          GetBaseFileSystem()->DeleteFile(dbname + "/" + fname, io_opts, dbg);
+      if (delete_status.ok()) {
+        ++deleted_files;
+      } else {
+        ++delete_failed;
+        if (lifecycle_logger_) {
+          lifecycle_logger_->LogEvent(
+              "cloud_invisible_local_delete_failed",
+              [&](FileLifecycleLogger::JsonWriter* w) {
+                w->AddString("file_name", fname);
+                w->AddString("status", delete_status.ToString());
+                AddDeleteFileContext(w, fname);
+              });
+        }
+      }
     }
+  }
+  if (lifecycle_logger_) {
+    lifecycle_logger_->LogEvent(
+        "invisible_cleanup_local_summary",
+        [&](FileLifecycleLogger::JsonWriter* w) {
+          w->AddUint64("total_files", total_files);
+          w->AddUint64("invisible_files", invisible_files);
+          w->AddUint64("deleted_files", deleted_files);
+          w->AddUint64("delete_failed", delete_failed);
+        });
   }
   return s;
 }

@@ -3,8 +3,11 @@
 #pragma once
 #include <chrono>
 #include <functional>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include "rocksdb/io_status.h"
 
@@ -28,12 +31,16 @@ class CloudFileDeletionScheduler
 
   ~CloudFileDeletionScheduler();
 
-  void UnscheduleFileDeletion(const std::string& filename);
+ void UnscheduleFileDeletion(const std::string& filename);
   using FileDeletionRunnable = std::function<void()>;
+  using EventCallback = std::function<void(
+      const std::string& event, const std::string& filename,
+      const std::string& detail, uint64_t queue_size)>;
   // Schedule the file deletion runnable(which actually delets the file from
   // cloud) to be executed in the future (specified by `file_deletion_delay_`).
   rocksdb::IOStatus ScheduleFileDeletion(const std::string& filename,
                                          FileDeletionRunnable runnable);
+  void SetEventCallback(EventCallback cb);
 
 #ifndef NDEBUG
   size_t TEST_NumScheduledJobs() const;
@@ -53,11 +60,17 @@ class CloudFileDeletionScheduler
  private:
   // execute the `FileDeletionRunnable`
   void DoDeleteFile(const std::string& fname, FileDeletionRunnable cb);
+  void EmitEvent(const char* event, const std::string& filename,
+                 const std::string& detail);
+  EventCallback GetEventCallback() const;
+  uint64_t GetQueueSize() const;
   std::shared_ptr<CloudScheduler> scheduler_;
 
   mutable std::mutex files_to_delete_mutex_;
   std::unordered_map<std::string, int> files_to_delete_;
   std::chrono::seconds file_deletion_delay_;
+  mutable std::mutex event_cb_mutex_;
+  EventCallback event_cb_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

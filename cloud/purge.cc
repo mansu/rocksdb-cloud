@@ -39,6 +39,15 @@ void CloudFileSystemImpl::Purger() {
     if (!purger_is_running_) {
       break;
     }
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "cloud_purger_cycle_begin",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddUint64("queued_paths", to_be_deleted_paths.size());
+            w->AddUint64("queued_dbids", to_be_deleted_dbids.size());
+            w->AddUint64("period_ms", period.count());
+          });
+    }
     // delete the objects that were detected to be obsolete in the last
     // run. This ensures that obsolete files are not immediately deleted
     // because we need to give the clone-to-local-dir code ample time to
@@ -83,30 +92,66 @@ void CloudFileSystemImpl::Purger() {
 
     to_be_deleted_paths.clear();
     to_be_deleted_dbids.clear();
-    FindObsoleteFiles(GetDestBucketName(), &to_be_deleted_paths);
+    ObsoleteFilesStats stats;
+    auto find_files_status =
+        FindObsoleteFiles(GetDestBucketName(), &to_be_deleted_paths, &stats);
     FindObsoleteDbid(GetDestBucketName(), &to_be_deleted_dbids);
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "cloud_purger_cycle_end",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddUint64("found_paths", to_be_deleted_paths.size());
+            w->AddUint64("found_dbids", to_be_deleted_dbids.size());
+            w->AddUint64("total_files", stats.total_files);
+            w->AddUint64("live_files", stats.live_files);
+            w->AddUint64("obsolete_files", stats.obsolete_files);
+            w->AddUint64("dbid_count", stats.dbid_count);
+            w->AddString("status", find_files_status.ToString());
+          });
+    }
   }
 }
 
 IOStatus CloudFileSystemImpl::FindObsoleteFiles(
     const std::string& bucket_name_prefix,
-    std::vector<std::string>* pathnames) {
+    std::vector<std::string>* pathnames, ObsoleteFilesStats* stats) {
   std::set<std::string> live_files;
 
   // fetch list of all registered dbids
   DbidList dbid_list;
   auto st = GetDbidList(bucket_name_prefix, &dbid_list);
   if (!st.ok()) {
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "cloud_purger_list_failed",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("step", "get_dbid_list");
+            w->AddString("bucket_prefix", bucket_name_prefix);
+            w->AddString("status", st.ToString());
+          });
+    }
     Log(InfoLogLevel::ERROR_LEVEL, info_log_,
         "[pg] GetDbidList on bucket prefix %s. %s", bucket_name_prefix.c_str(),
         st.ToString().c_str());
     return st;
+  }
+  if (stats != nullptr) {
+    stats->dbid_count = dbid_list.size();
   }
 
   // For each of the dbids names, extract its list of parent-dbs
   DbidParents parents;
   st = extractParents(bucket_name_prefix, dbid_list, &parents);
   if (!st.ok()) {
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "cloud_purger_list_failed",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("step", "extract_parents");
+            w->AddString("bucket_prefix", bucket_name_prefix);
+            w->AddString("status", st.ToString());
+          });
+    }
     Log(InfoLogLevel::ERROR_LEVEL, info_log_,
         "[pg] extractParents on bucket prefix %s. %s",
         bucket_name_prefix.c_str(), st.ToString().c_str());
@@ -141,6 +186,9 @@ IOStatus CloudFileSystemImpl::FindObsoleteFiles(
       }
     }
   }
+  if (stats != nullptr) {
+    stats->live_files = live_files.size();
+  }
 
   // Get all files from all dbpaths in this bucket
   std::vector<std::string> all_files;
@@ -155,6 +203,16 @@ IOStatus CloudFileSystemImpl::FindObsoleteFiles(
     st = GetStorageProvider()->ListCloudObjects(bucket_name_prefix, mpath,
                                                 &objects);
     if (!st.ok()) {
+      if (lifecycle_logger_) {
+        lifecycle_logger_->LogEvent(
+            "cloud_purger_list_failed",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("step", "list_cloud_objects");
+              w->AddString("bucket_prefix", bucket_name_prefix);
+              w->AddString("path_prefix", mpath);
+              w->AddString("status", st.ToString());
+            });
+      }
       Log(InfoLogLevel::ERROR_LEVEL, info_log_,
           "[pg] Unable to list objects in bucketprefix %s path_prefix %s. %s",
           bucket_name_prefix.c_str(), mpath.c_str(), st.ToString().c_str());
@@ -173,6 +231,10 @@ IOStatus CloudFileSystemImpl::FindObsoleteFiles(
           bucket_name_prefix.c_str(), candidate.c_str());
       pathnames->push_back(candidate);
     }
+  }
+  if (stats != nullptr) {
+    stats->total_files = all_files.size();
+    stats->obsolete_files = pathnames->size();
   }
   return IOStatus::OK();
 }

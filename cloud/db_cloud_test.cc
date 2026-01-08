@@ -864,7 +864,8 @@ TEST_F(CloudTest, DISABLED_TrueClone) {
     auto* cimpl = static_cast<CloudFileSystemImpl*>(env->GetFileSystem().get());
     std::vector<std::string> to_be_deleted;
     ASSERT_OK(
-        cimpl->FindObsoleteFiles(cimpl->GetSrcBucketName(), &to_be_deleted));
+        cimpl->FindObsoleteFiles(cimpl->GetSrcBucketName(), &to_be_deleted,
+                                 nullptr));
     // TODO(igor): Re-enable once purger code is fixed
     // ASSERT_EQ(to_be_deleted.size(), 0);
 

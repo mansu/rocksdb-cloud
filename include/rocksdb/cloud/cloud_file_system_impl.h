@@ -154,8 +154,16 @@ class CloudFileSystemImpl : public CloudFileSystem {
   // A map from a dbid to the list of all its parent dbids.
   typedef std::map<std::string, std::vector<std::string>> DbidParents;
 
+  struct ObsoleteFilesStats {
+    uint64_t total_files = 0;
+    uint64_t live_files = 0;
+    uint64_t obsolete_files = 0;
+    uint64_t dbid_count = 0;
+  };
+
   IOStatus FindObsoleteFiles(const std::string& bucket_name_prefix,
-                             std::vector<std::string>* pathnames);
+                             std::vector<std::string>* pathnames,
+                             ObsoleteFilesStats* stats = nullptr);
   IOStatus FindObsoleteDbid(const std::string& bucket_name_prefix,
                             std::vector<std::string>* dbids);
 
@@ -421,9 +429,7 @@ class CloudFileSystemImpl : public CloudFileSystem {
  void SetLogger(std::shared_ptr<Logger> l) override {
    info_log_ = std::move(l);
  }
-  void SetFileLifecycleLogger(std::shared_ptr<FileLifecycleLogger> logger) {
-    lifecycle_logger_ = std::move(logger);
-  }
+  void SetFileLifecycleLogger(std::shared_ptr<FileLifecycleLogger> logger);
 
  private:
   // Files are invisibile if:

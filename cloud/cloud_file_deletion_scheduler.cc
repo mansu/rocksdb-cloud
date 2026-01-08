@@ -23,12 +23,44 @@ CloudFileDeletionScheduler::~CloudFileDeletionScheduler() {
   // `LocalCloudScheduler` will remove the jobs in the queue when destructed
 }
 
+void CloudFileDeletionScheduler::SetEventCallback(EventCallback cb) {
+  std::lock_guard<std::mutex> lk(event_cb_mutex_);
+  event_cb_ = std::move(cb);
+}
+
+CloudFileDeletionScheduler::EventCallback
+CloudFileDeletionScheduler::GetEventCallback() const {
+  std::lock_guard<std::mutex> lk(event_cb_mutex_);
+  return event_cb_;
+}
+
+void CloudFileDeletionScheduler::EmitEvent(const char* event,
+                                           const std::string& filename,
+                                           const std::string& detail) {
+  auto cb = GetEventCallback();
+  if (cb) {
+    cb(event, filename, detail, GetQueueSize());
+  }
+}
+
+uint64_t CloudFileDeletionScheduler::GetQueueSize() const {
+  std::lock_guard<std::mutex> lk(files_to_delete_mutex_);
+  return files_to_delete_.size();
+}
+
 void CloudFileDeletionScheduler::UnscheduleFileDeletion(const std::string& filename) {
+  bool canceled = false;
   std::lock_guard<std::mutex> lk(files_to_delete_mutex_);
   auto itr = files_to_delete_.find(filename);
   if (itr != files_to_delete_.end()) {
     scheduler_->CancelJob(itr->second);
     files_to_delete_.erase(itr);
+    canceled = true;
+  }
+  if (canceled) {
+    EmitEvent("cloud_delete_job_canceled", filename, "");
+  } else {
+    EmitEvent("cloud_delete_job_cancel_miss", filename, "not_scheduled");
   }
 }
 
@@ -50,32 +82,48 @@ rocksdb::IOStatus CloudFileDeletionScheduler::ScheduleFileDeletion(
     (void) file_deleted;
   };
 
+  bool already_scheduled = false;
+  bool scheduled = false;
   {
     std::lock_guard<std::mutex> lk(files_to_delete_mutex_);
     if (files_to_delete_.find(fname) != files_to_delete_.end()) {
       // already in the queue
-      return IOStatus::OK();
+      already_scheduled = true;
+    } else {
+      auto handle = scheduler_->ScheduleJob(file_deletion_delay_,
+                                            std::move(doDeleteFile), nullptr);
+      files_to_delete_.emplace(fname, std::move(handle));
+      scheduled = true;
     }
-
-    auto handle = scheduler_->ScheduleJob(file_deletion_delay_,
-                                          std::move(doDeleteFile), nullptr);
-    files_to_delete_.emplace(fname, std::move(handle));
+  }
+  if (already_scheduled) {
+    EmitEvent("cloud_delete_job_already_scheduled", fname, "");
+  } else if (scheduled) {
+    EmitEvent("cloud_delete_job_scheduled", fname,
+              "delay_sec=" + std::to_string(file_deletion_delay_.count()));
   }
   return IOStatus::OK();
 }
 
 void CloudFileDeletionScheduler::DoDeleteFile(const std::string& fname,
                                               FileDeletionRunnable runnable) {
+  bool missing = false;
   {
     std::lock_guard<std::mutex> lk(files_to_delete_mutex_);
     auto itr = files_to_delete_.find(fname);
     if (itr == files_to_delete_.end()) {
       // File was removed from files_to_delete_, do not delete!
-      return;
+      missing = true;
+    } else {
+      files_to_delete_.erase(itr);
     }
-    files_to_delete_.erase(itr);
   }
 
+  if (missing) {
+    EmitEvent("cloud_delete_job_missing", fname, "not_in_queue");
+    return;
+  }
+  EmitEvent("cloud_delete_job_fired", fname, "");
   runnable();
 }
 
