@@ -96,25 +96,6 @@ CloudFileSystemImpl::~CloudFileSystemImpl() {
 void CloudFileSystemImpl::SetFileLifecycleLogger(
     std::shared_ptr<FileLifecycleLogger> logger) {
   lifecycle_logger_ = std::move(logger);
-  if (cloud_file_deletion_scheduler_) {
-    std::weak_ptr<FileLifecycleLogger> logger_wp = lifecycle_logger_;
-    cloud_file_deletion_scheduler_->SetEventCallback(
-        [logger_wp](const std::string& event, const std::string& filename,
-                    const std::string& detail, uint64_t queue_size) {
-          auto lifecycle_logger = logger_wp.lock();
-          if (!lifecycle_logger) {
-            return;
-          }
-          lifecycle_logger->LogEvent(
-              event, [&](FileLifecycleLogger::JsonWriter* w) {
-                w->AddString("file_name", filename);
-                w->AddUint64("queue_size", queue_size);
-                if (!detail.empty()) {
-                  w->AddString("detail", detail);
-                }
-              });
-        });
-  }
 }
 
 IOStatus CloudFileSystemImpl::ExistsCloudObject(const std::string& fname) {
