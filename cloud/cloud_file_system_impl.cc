@@ -1269,6 +1269,13 @@ IOStatus CloudFileSystemImpl::DeleteCloudFileFromDestInternal(
         if (!storage_provider || !info_log) {
           return;
         }
+        if (lifecycle_logger) {
+          lifecycle_logger->LogEvent("cloud_delete_start",
+                                     [&](FileLifecycleLogger::JsonWriter* w) {
+                                       w->AddString("file_name", base);
+                                       w->AddString("cloud_path", path);
+                                     });
+        }
         auto st = storage_provider->DeleteCloudObject(bucket, path);
         if (lifecycle_logger) {
           lifecycle_logger->LogEvent("cloud_delete_done",
@@ -2143,16 +2150,46 @@ IOStatus CloudFileSystemImpl::LoadCloudManifest(const std::string& local_dbname,
   if (st.ok()) {
     std::vector<std::string> active_cookies{
         cloud_fs_options.cookie_on_open, cloud_fs_options.new_cookie_on_open};
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "invisible_cleanup_begin",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddBool("read_only", read_only);
+            w->AddBool("delete_cloud_invisible_files_on_open",
+                       cloud_fs_options.delete_cloud_invisible_files_on_open);
+            w->AddBool("has_dest_bucket", HasDestBucket());
+            w->AddStringList("active_cookies", active_cookies);
+          });
+    }
     st = DeleteLocalInvisibleFiles(local_dbname, active_cookies);
-    if (st.ok() && !read_only && cloud_fs_options.delete_cloud_invisible_files_on_open &&
+    if (st.ok() && !read_only &&
+        cloud_fs_options.delete_cloud_invisible_files_on_open &&
         HasDestBucket()) {
       st = DeleteCloudInvisibleFiles(active_cookies);
+    } else if (st.ok() && read_only &&
+               cloud_fs_options.delete_cloud_invisible_files_on_open &&
+               HasDestBucket()) {
+      if (lifecycle_logger_) {
+        lifecycle_logger_->LogEvent(
+            "invisible_cleanup_cloud_skipped",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("reason", "read_only");
+              w->AddStringList("active_cookies", active_cookies);
+            });
+      }
     }
     if (!st.ok()) {
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
           "Failed to delete invisible files: %s", st.ToString().c_str());
       // Ignore the fail
       st = IOStatus::OK();
+    }
+    if (lifecycle_logger_) {
+      lifecycle_logger_->LogEvent(
+          "invisible_cleanup_end",
+          [&](FileLifecycleLogger::JsonWriter* w) {
+            w->AddString("status", st.ToString());
+          });
     }
   }
 

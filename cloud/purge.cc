@@ -10,6 +10,7 @@
 #include "cloud/db_cloud_impl.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
+#include "cloud/file_lifecycle_logger.h"
 #include "file/filename.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/db.h"
@@ -47,14 +48,34 @@ void CloudFileSystemImpl::Purger() {
     for (const auto& p : to_be_deleted_dbids) {
       // TODO more unit tests before we delete data
       // st = DeleteDbid(GetDestBucketName(), p);
+      Status dbid_status = Status::NotSupported("DeleteDbid disabled");
+      if (lifecycle_logger_) {
+        lifecycle_logger_->LogEvent(
+            "cloud_purger_dbid_delete_skipped",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("dbpath", p);
+              w->AddString("bucket", GetDestBucketName());
+              w->AddString("status", dbid_status.ToString());
+            });
+      }
       Log(InfoLogLevel::WARN_LEVEL, info_log_,
           "[pg] dbid %s non-existent dbpath %s deleted. %s",
-          GetDestBucketName().c_str(), p.c_str(), st.ToString().c_str());
+          GetDestBucketName().c_str(), p.c_str(),
+          dbid_status.ToString().c_str());
     }
 
     // delete obsolete paths
     for (const auto& p : to_be_deleted_paths) {
       st = GetStorageProvider()->DeleteCloudObject(GetDestBucketName(), p);
+      if (lifecycle_logger_) {
+        lifecycle_logger_->LogEvent(
+            "cloud_purger_delete",
+            [&](FileLifecycleLogger::JsonWriter* w) {
+              w->AddString("cloud_path", p);
+              w->AddString("bucket", GetDestBucketName());
+              w->AddString("status", st.ToString());
+            });
+      }
       Log(InfoLogLevel::WARN_LEVEL, info_log_,
           "[pg] bucket prefix %s obsolete dbpath %s deleted. %s",
           GetDestBucketName().c_str(), p.c_str(), st.ToString().c_str());
