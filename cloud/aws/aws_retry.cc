@@ -3,6 +3,8 @@
 //
 
 #include <cinttypes>
+#include <cstdlib>
+#include <string>
 
 #include "cloud/aws/aws_file.h"
 #include "rocksdb/cloud/cloud_file_system.h"
@@ -11,10 +13,27 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/client/SpecifiedRetryableErrorsRetryStrategy.h>
 #include <aws/core/client/RetryStrategy.h>
+#include <aws/core/http/Scheme.h>
 #endif  // USE_AWS
 
 namespace ROCKSDB_NAMESPACE {
 #ifdef USE_AWS
+namespace {
+std::string GetEnvOrEmpty(const char* name) {
+  const char* value = std::getenv(name);
+  return value ? std::string(value) : std::string();
+}
+
+std::string ToLowerAscii(std::string value) {
+  for (char& ch : value) {
+    if (ch >= 'A' && ch <= 'Z') {
+      ch = static_cast<char>(ch - 'A' + 'a');
+    }
+  }
+  return value;
+}
+}  // namespace
+
 //
 // Ability to configure retry policies for the AWS client
 //
@@ -129,6 +148,23 @@ Status AwsCloudOptions::GetClientConfiguration(
   }
 
   config->region = ToAwsString(region);
+  std::string endpoint = GetEnvOrEmpty("ROCKSDB_CLOUD_S3_ENDPOINT");
+  if (endpoint.empty()) {
+    endpoint = GetEnvOrEmpty("ROCKSDB_AWS_S3_ENDPOINT");
+  }
+  if (!endpoint.empty()) {
+    std::string endpoint_lower = ToLowerAscii(endpoint);
+    const char* http_prefix = "http://";
+    const char* https_prefix = "https://";
+    if (endpoint_lower.rfind(http_prefix, 0) == 0) {
+      config->scheme = Aws::Http::Scheme::HTTP;
+      endpoint.erase(0, std::string(http_prefix).size());
+    } else if (endpoint_lower.rfind(https_prefix, 0) == 0) {
+      config->scheme = Aws::Http::Scheme::HTTPS;
+      endpoint.erase(0, std::string(https_prefix).size());
+    }
+    config->endpointOverride = Aws::String(endpoint.c_str());
+  }
   return Status::OK();
 }
 #else

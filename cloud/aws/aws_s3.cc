@@ -38,6 +38,7 @@
 
 #include <cassert>
 #include <cinttypes>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 
@@ -61,6 +62,23 @@
 
 namespace ROCKSDB_NAMESPACE {
 #ifdef USE_AWS
+namespace {
+bool EnvTruth(const char* name) {
+  const char* value = std::getenv(name);
+  if (!value) {
+    return false;
+  }
+  std::string normalized(value);
+  for (char& ch : normalized) {
+    if (ch >= 'A' && ch <= 'Z') {
+      ch = static_cast<char>(ch - 'A' + 'a');
+    }
+  }
+  return normalized == "1" || normalized == "true" || normalized == "yes" ||
+         normalized == "on";
+}
+}  // namespace
+
 class CloudRequestCallbackGuard {
  public:
   CloudRequestCallbackGuard(CloudRequestCallback* callback,
@@ -114,13 +132,17 @@ class AwsS3ClientWrapper {
       const Aws::Client::ClientConfiguration& config,
       const CloudFileSystemOptions& cloud_options)
       : cloud_request_callback_(cloud_options.cloud_request_callback) {
+    bool use_virtual_addressing = true;
+    if (EnvTruth("ROCKSDB_CLOUD_S3_USE_PATH_STYLE")) {
+      use_virtual_addressing = false;
+    }
     if (cloud_options.s3_client_factory) {
       client_ = cloud_options.s3_client_factory(creds, config);
     } else if (creds) {
       client_ = std::make_shared<Aws::S3::S3Client>(
           creds, config,
           Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-          true /* useVirtualAddressing */);
+          use_virtual_addressing);
     } else {
       client_ = std::make_shared<Aws::S3::S3Client>(config);
     }
