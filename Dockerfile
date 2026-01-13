@@ -56,10 +56,10 @@ WORKDIR /src/rocksdb-cloud
 COPY . .
 ENV AWS_SDK=/opt/aws-sdk AWS_CRT=/opt/aws-sdk \
     LD_LIBRARY_PATH=/opt/aws-sdk/lib:/opt/aws-sdk/lib64 \
-    TMPDIR=/tmp \
-    JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-# Fail early if the JDK is not present; record the resolved JAVA_HOME.
-RUN test -x "$JAVA_HOME/bin/javac" && \
+    TMPDIR=/tmp
+# Detect JAVA_HOME dynamically based on architecture (amd64 vs arm64).
+RUN JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac)))) && \
+    test -x "$JAVA_HOME/bin/javac" && \
     "$JAVA_HOME/bin/javac" -version && \
     "$JAVA_HOME/bin/java" -version && \
     echo "$JAVA_HOME" > /etc/java_home
