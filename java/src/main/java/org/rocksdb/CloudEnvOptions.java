@@ -9,7 +9,7 @@ package org.rocksdb;
  * This mirrors the options expected by {@code CloudFileSystemEnv::CreateFromString}.
  */
 public class CloudEnvOptions {
-  private String id = "cloud";
+  private String id = "aws";
   private String srcBucket;
   private String srcObject;
   private String srcRegion;
@@ -24,6 +24,8 @@ public class CloudEnvOptions {
   private boolean resyncOnOpen = false;
   private boolean rollManifestOnOpen = true;
   private boolean useAwsTransferManager = false;
+  private String endpointOverride;
+  private boolean usePathStyle = false;
   private String cookieOnOpen = "";
   private String newCookieOnOpen = "";
   private boolean createBucketIfMissing = true;
@@ -109,6 +111,26 @@ public class CloudEnvOptions {
     return this;
   }
 
+  /**
+   * Set custom S3-compatible endpoint URL (e.g., for MinIO, LocalStack, S3Mock).
+   * If not set, uses the default AWS S3 endpoint.
+   */
+  public CloudEnvOptions setEndpointOverride(final String endpointOverride) {
+    this.endpointOverride = endpointOverride;
+    return this;
+  }
+
+  /**
+   * If true, use path-style addressing (e.g., endpoint/bucket/key) instead of
+   * virtual-hosted-style (e.g., bucket.endpoint/key). Required for most
+   * S3-compatible services like MinIO, LocalStack, and S3Mock.
+   * Default: false
+   */
+  public CloudEnvOptions setUsePathStyle(final boolean usePathStyle) {
+    this.usePathStyle = usePathStyle;
+    return this;
+  }
+
   public CloudEnvOptions setCookieOnOpen(final String cookieOnOpen) {
     this.cookieOnOpen = cookieOnOpen;
     return this;
@@ -159,6 +181,8 @@ public class CloudEnvOptions {
     append(sb, "resync_on_open", resyncOnOpen);
     append(sb, "roll_cloud_manifest_on_open", rollManifestOnOpen);
     append(sb, "use_aws_transfer_manager", useAwsTransferManager);
+    append(sb, "endpoint_override", endpointOverride);
+    append(sb, "use_path_style", usePathStyle);
     append(sb, "cookie_on_open", cookieOnOpen);
     append(sb, "new_cookie_on_open", newCookieOnOpen);
     append(sb, "create_bucket_if_missing", createBucketIfMissing);
@@ -284,6 +308,16 @@ public class CloudEnvOptions {
 
     public Builder setUseAwsTransferManager(final boolean useAwsTransferManager) {
       opts.setUseAwsTransferManager(useAwsTransferManager);
+      return this;
+    }
+
+    public Builder setEndpointOverride(final String endpointOverride) {
+      opts.setEndpointOverride(endpointOverride);
+      return this;
+    }
+
+    public Builder setUsePathStyle(final boolean usePathStyle) {
+      opts.setUsePathStyle(usePathStyle);
       return this;
     }
 

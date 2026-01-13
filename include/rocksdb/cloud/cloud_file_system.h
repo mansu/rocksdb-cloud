@@ -299,6 +299,17 @@ class CloudFileSystemOptions {
   // Default: false
   bool use_aws_transfer_manager;
 
+  // Custom S3-compatible endpoint URL (e.g., for MinIO, LocalStack, S3Mock).
+  // If empty, uses the default AWS S3 endpoint.
+  // Default: ""
+  std::string endpoint_override;
+
+  // If true, use path-style addressing (e.g., endpoint/bucket/key) instead of
+  // virtual-hosted-style (e.g., bucket.endpoint/key). Required for most
+  // S3-compatible services like MinIO, LocalStack, and S3Mock.
+  // Default: false
+  bool use_path_style;
+
   // The number of object's metadata that are fetched in every iteration when
   // listing the results of a directory Default: 5000
   int number_objects_listed_in_one_iteration;
@@ -426,6 +437,8 @@ class CloudFileSystemOptions {
         resync_on_open(_resync_on_open),
         skip_dbid_verification(_skip_dbid_verification),
         use_aws_transfer_manager(_use_aws_transfer_manager),
+        endpoint_override(),
+        use_path_style(false),
         number_objects_listed_in_one_iteration(
             _number_objects_listed_in_one_iteration),
         constant_sst_file_size_in_sst_file_manager(
