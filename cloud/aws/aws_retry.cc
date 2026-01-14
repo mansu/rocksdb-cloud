@@ -129,6 +129,13 @@ Status AwsCloudOptions::GetClientConfiguration(
   }
 
   config->region = ToAwsString(region);
+
+  // Set custom endpoint if configured (for S3-compatible services like MinIO,
+  // LocalStack, S3Mock)
+  if (!cloud_fs_options.endpoint_override.empty()) {
+    config->endpointOverride = ToAwsString(cloud_fs_options.endpoint_override);
+  }
+
   return Status::OK();
 }
 #else

@@ -114,15 +114,21 @@ class AwsS3ClientWrapper {
       const Aws::Client::ClientConfiguration& config,
       const CloudFileSystemOptions& cloud_options)
       : cloud_request_callback_(cloud_options.cloud_request_callback) {
+    // Use path-style addressing if configured (required for S3-compatible
+    // services like MinIO, LocalStack, S3Mock)
+    const bool useVirtualAddressing = !cloud_options.use_path_style;
     if (cloud_options.s3_client_factory) {
       client_ = cloud_options.s3_client_factory(creds, config);
     } else if (creds) {
       client_ = std::make_shared<Aws::S3::S3Client>(
           creds, config,
           Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-          true /* useVirtualAddressing */);
+          useVirtualAddressing);
     } else {
-      client_ = std::make_shared<Aws::S3::S3Client>(config);
+      client_ = std::make_shared<Aws::S3::S3Client>(
+          config,
+          Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+          useVirtualAddressing);
     }
     if (cloud_options.use_aws_transfer_manager) {
       Aws::Transfer::TransferManagerConfiguration transferManagerConfig(
