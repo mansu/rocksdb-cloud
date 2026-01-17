@@ -44,6 +44,7 @@ RUN cmake -S aws-sdk-cpp -B sdk-build \
 # ---- Builder (RocksDB build + Java artifacts) ----
 FROM ubuntu:24.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
+ARG ROCKSDB_MAKE_JOBS=2
 RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake git pkg-config ccache perl wget ca-certificates curl \
   libbz2-dev zlib1g-dev libzstd-dev liblz4-dev libsnappy-dev libgflags-dev \
@@ -68,7 +69,7 @@ ENV CC="ccache /usr/bin/gcc-11" CXX="ccache /usr/bin/g++-11" \
     CCACHE_BASEDIR=/src/rocksdb-cloud CCACHE_NOHASHDIR=1
 RUN mkdir -p /tmp/ccache-gcc11
 RUN make clean && make jclean
-RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" rocksdbjava && \
+RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 make -j"${ROCKSDB_MAKE_JOBS}" rocksdbjava && \
     cd java && JAVA_HOME="$(cat /etc/java_home)" make sample
 
 # ---- Runtime (minimal image with JNI + deps) ----
