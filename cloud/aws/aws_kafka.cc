@@ -50,11 +50,9 @@ class KafkaWritableFile : public CloudLogWritableFile {
   IOStatus Sync(const IOOptions& io_opts, IODebugContext* dbg) override;
   IOStatus Flush(const IOOptions& io_opts, IODebugContext* dbg) override;
   IOStatus LogDelete() override;
-  IOStatus GetFileSize(const IOOptions& /*options*/, uint64_t* size) override {
-    if (size != nullptr) {
-      *size = current_offset_;
-    }
-    return status_;
+  uint64_t GetFileSize(const IOOptions& /*options*/,
+                       IODebugContext* /*dbg*/) override {
+    return current_offset_;
   }
 
  private:

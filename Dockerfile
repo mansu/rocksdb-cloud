@@ -44,11 +44,16 @@ RUN cmake -S aws-sdk-cpp -B sdk-build \
 # ---- Builder (RocksDB build + Java artifacts) ----
 FROM ubuntu:24.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
+ARG USE_KAFKA=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake git pkg-config ccache perl wget ca-certificates curl \
   libbz2-dev zlib1g-dev libzstd-dev liblz4-dev libsnappy-dev libgflags-dev \
   libssl-dev libcurl4-openssl-dev \
-  openjdk-21-jdk gcc-11 g++-11 && rm -rf /var/lib/apt/lists/*
+  openjdk-21-jdk gcc-11 g++-11 && \
+  if [ "${USE_KAFKA}" = "1" ]; then \
+    apt-get install -y --no-install-recommends librdkafka-dev librdkafka1 librdkafka++1; \
+  fi && \
+  rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /opt/aws-sdk /opt/aws-sdk
 
@@ -68,15 +73,20 @@ ENV CC="ccache /usr/bin/gcc-11" CXX="ccache /usr/bin/g++-11" \
     CCACHE_BASEDIR=/src/rocksdb-cloud CCACHE_NOHASHDIR=1
 RUN mkdir -p /tmp/ccache-gcc11
 RUN make clean && make jclean
-RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 make -j"$(nproc)" rocksdbjava && \
+RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 USE_KAFKA=${USE_KAFKA} \
+    make -j"$(nproc)" rocksdbjava && \
     cd java && JAVA_HOME="$(cat /etc/java_home)" make sample
 
 # ---- Runtime (minimal image with JNI + deps) ----
 FROM ubuntu:24.04
+ARG USE_KAFKA=0
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
   openjdk-21-jre-headless libzstd1 liblz4-1 libsnappy1v5 libbz2-1.0 \
   libssl3 libcurl4 && \
+  if [ "${USE_KAFKA}" = "1" ]; then \
+    apt-get install -y --no-install-recommends librdkafka1 librdkafka++1; \
+  fi && \
   rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/aws-sdk /opt/aws-sdk

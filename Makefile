@@ -2623,4 +2623,4 @@ endif
 # Build the JNI Docker image with a consistent tag
 .PHONY: docker-build
 docker-build:
-	DOCKER_BUILDKIT=1 docker build -t rocksdb-cloud:latest .
+	DOCKER_BUILDKIT=1 docker build --build-arg USE_KAFKA=$(USE_KAFKA) -t rocksdb-cloud:latest .

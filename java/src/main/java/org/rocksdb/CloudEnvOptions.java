@@ -4,6 +4,9 @@
 
 package org.rocksdb;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Convenience container for building a cloud environment configuration string.
  * This mirrors the options expected by {@code CloudFileSystemEnv::CreateFromString}.
@@ -30,6 +33,8 @@ public class CloudEnvOptions {
   private String newCookieOnOpen = "";
   private boolean createBucketIfMissing = true;
   private boolean invokePrepareOptions = true;
+  private String controller;
+  private final Map<String, String> kafkaConfigs = new LinkedHashMap<>();
 
   public CloudEnvOptions() {}
 
@@ -160,6 +165,25 @@ public class CloudEnvOptions {
     return this;
   }
 
+  /**
+   * Set the cloud log controller (e.g., "kafka" or "kinesis").
+   */
+  public CloudEnvOptions setController(final String controller) {
+    this.controller = controller;
+    return this;
+  }
+
+  /**
+   * Add a Kafka client config entry (key/value).
+   */
+  public CloudEnvOptions putKafkaConfig(final String key, final String value) {
+    if (key == null || key.isEmpty() || value == null) {
+      return this;
+    }
+    kafkaConfigs.put(key, value);
+    return this;
+  }
+
   boolean invokePrepareOptions() {
     return invokePrepareOptions;
   }
@@ -189,6 +213,10 @@ public class CloudEnvOptions {
     append(sb, "s3.access_key_id", accessKeyId);
     append(sb, "s3.secret_access_key", secretAccessKey);
     append(sb, "s3.config_file", awsConfigFile);
+    append(sb, "controller", controller);
+    for (Map.Entry<String, String> entry : kafkaConfigs.entrySet()) {
+      append(sb, "kafka.config." + entry.getKey(), entry.getValue());
+    }
     // strip trailing ';' if present
     if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ';') {
       sb.setLength(sb.length() - 1);
@@ -338,6 +366,25 @@ public class CloudEnvOptions {
 
     public Builder setCreateBucketIfMissing(final boolean createBucketIfMissing) {
       opts.setCreateBucketIfMissing(createBucketIfMissing);
+      return this;
+    }
+
+    public Builder setController(final String controller) {
+      opts.setController(controller);
+      return this;
+    }
+
+    public Builder putKafkaConfig(final String key, final String value) {
+      opts.putKafkaConfig(key, value);
+      return this;
+    }
+
+    public Builder setKafkaConfigs(final Map<String, String> configs) {
+      if (configs != null) {
+        for (Map.Entry<String, String> entry : configs.entrySet()) {
+          opts.putKafkaConfig(entry.getKey(), entry.getValue());
+        }
+      }
       return this;
     }
 

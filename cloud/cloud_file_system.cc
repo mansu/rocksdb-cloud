@@ -31,6 +31,27 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+namespace {
+Status ExtractKafkaConfigs(
+    std::unordered_map<std::string, std::string>* options,
+    std::unordered_map<std::string, std::string>* kafka_config) {
+  const std::string prefix = "kafka.config.";
+  for (auto it = options->begin(); it != options->end();) {
+    if (StartsWith(it->first, prefix)) {
+      std::string key = it->first.substr(prefix.size());
+      if (key.empty()) {
+        return Status::InvalidArgument("Invalid kafka config key", it->first);
+      }
+      (*kafka_config)[key] = it->second;
+      it = options->erase(it);
+    } else {
+      ++it;
+    }
+  }
+  return Status::OK();
+}
+}  // namespace
+
 void CloudFileSystemOptions::Dump(Logger* log) const {
   auto provider = storage_provider.get();
   auto controller = cloud_log_controller.get();
@@ -431,6 +452,9 @@ Status CloudFileSystemOptions::Configure(const ConfigOptions& config_options,
                                          const std::string& opts_str) {
   std::string current;
   Status s;
+  std::unordered_map<std::string, std::string> options;
+  std::unordered_map<std::string, std::string> kafka_config;
+  auto previous_kafka_config = kafka_log_options.client_config_params;
   if (!config_options.ignore_unknown_options) {
     s = Serialize(config_options, &current);
     if (!s.ok()) {
@@ -438,11 +462,20 @@ Status CloudFileSystemOptions::Configure(const ConfigOptions& config_options,
     }
   }
   if (s.ok()) {
-    s = OptionTypeInfo::ParseStruct(
-        config_options, CloudFileSystemOptions::kName(),
-        &cloud_fs_option_type_info, CloudFileSystemOptions::kName(), opts_str,
+    s = StringToMap(opts_str, &options);
+  }
+  if (s.ok()) {
+    s = ExtractKafkaConfigs(&options, &kafka_config);
+  }
+  if (s.ok() && !kafka_config.empty()) {
+    kafka_log_options.client_config_params = std::move(kafka_config);
+  }
+  if (s.ok()) {
+    s = OptionTypeInfo::ParseType(
+        config_options, options, cloud_fs_option_type_info,
         reinterpret_cast<char*>(this));
     if (!s.ok()) {  // Something went wrong.  Attempt to reset
+      kafka_log_options.client_config_params = previous_kafka_config;
       OptionTypeInfo::ParseStruct(
           config_options, CloudFileSystemOptions::kName(),
           &cloud_fs_option_type_info, CloudFileSystemOptions::kName(), current,
@@ -564,6 +597,15 @@ Status CloudFileSystemEnv::CreateFromString(
     auto* cfs = dynamic_cast<CloudFileSystemImpl*>(fs.get());
     assert(cfs);
     if (!options.empty()) {
+      std::unordered_map<std::string, std::string> kafka_config;
+      s = ExtractKafkaConfigs(&options, &kafka_config);
+      if (s.ok() && !kafka_config.empty()) {
+        auto* cfs_options = cfs->GetOptions<CloudFileSystemOptions>();
+        cfs_options->kafka_log_options.client_config_params =
+            std::move(kafka_config);
+      }
+    }
+    if (s.ok() && !options.empty()) {
       s = cfs->ConfigureFromMap(copy, options);
     }
     if (s.ok() && config_options.invoke_prepare_options) {
@@ -620,6 +662,14 @@ Status CloudFileSystemEnv::CreateFromString(
     auto copts = cfs->GetOptions<CloudFileSystemOptions>();
     *copts = cloud_options;
     if (!options.empty()) {
+      std::unordered_map<std::string, std::string> kafka_config;
+      s = ExtractKafkaConfigs(&options, &kafka_config);
+      if (s.ok() && !kafka_config.empty()) {
+        copts->kafka_log_options.client_config_params =
+            std::move(kafka_config);
+      }
+    }
+    if (s.ok() && !options.empty()) {
       s = cfs->ConfigureFromMap(copy, options);
     }
     if (s.ok() && config_options.invoke_prepare_options) {

@@ -695,9 +695,11 @@ if [ "${USE_KAFKA}XXX" = "1XXX" ]; then
   if [ -n "${KAFKA_PATH}" ]; then
     COMMON_FLAGS="$COMMON_FLAGS -I${KAFKA_PATH}/include"
     PLATFORM_LDFLAGS="-L${KAFKA_PATH}/lib $PLATFORM_LDFLAGS"
+    JAVA_LDFLAGS="-L${KAFKA_PATH}/lib $JAVA_LDFLAGS"
   fi
   COMMON_FLAGS="$COMMON_FLAGS -DUSE_KAFKA"
   PLATFORM_LDFLAGS="-lrdkafka++ $PLATFORM_LDFLAGS"
+  JAVA_LDFLAGS="-lrdkafka++ $JAVA_LDFLAGS"
 fi
 
 if [ "$PORTABLE" == "" ] || [ "$PORTABLE" == 0 ]; then
