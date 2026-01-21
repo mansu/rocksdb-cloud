@@ -611,7 +611,8 @@ Status CloudFileSystemEnv::CreateFromString(
     if (s.ok() && config_options.invoke_prepare_options) {
       auto env = NewCompositeEnvFromFs(cfs, copy.env);
       copy.invoke_prepare_options = config_options.invoke_prepare_options;
-      copy.env = env.get();
+      cfs->composite_env_ = std::move(env);
+      copy.env = cfs->composite_env_.get();
       s = cfs->PrepareOptions(copy);
       if (s.ok()) {
         Options tmp;
@@ -675,7 +676,8 @@ Status CloudFileSystemEnv::CreateFromString(
     if (s.ok() && config_options.invoke_prepare_options) {
       auto env = NewCompositeEnvFromFs(cfs, copy.env);
       copy.invoke_prepare_options = config_options.invoke_prepare_options;
-      copy.env = env.get();
+      cfs->composite_env_ = std::move(env);
+      copy.env = cfs->composite_env_.get();
       s = cfs->PrepareOptions(copy);
       if (s.ok()) {
         Options tmp;
