@@ -305,9 +305,19 @@ IOStatus CloudLogControllerImpl::Retry(RetryType func) {
   IOStatus stat;
   std::chrono::microseconds start(env_->NowMicros());
 
+  Log(InfoLogLevel::DEBUG_LEVEL, cloud_fs_ ? cloud_fs_->GetLogger() : nullptr,
+      "[%s] Retry begin this=%p env=%p cloud_fs=%p running=%d tid=%p", Name(),
+      static_cast<void*>(this), static_cast<void*>(env_),
+      static_cast<void*>(cloud_fs_), running_.load(),
+      static_cast<void*>(tid_.get()));
+
   while (true) {
     // If command is successful, return immediately
+    Log(InfoLogLevel::DEBUG_LEVEL, cloud_fs_ ? cloud_fs_->GetLogger() : nullptr,
+        "[%s] Retry invoking func", Name());
     stat = func();
+    Log(InfoLogLevel::DEBUG_LEVEL, cloud_fs_ ? cloud_fs_->GetLogger() : nullptr,
+        "[%s] Retry func status %s", Name(), stat.ToString().c_str());
     if (stat.ok()) {
       break;
     }
@@ -407,8 +417,9 @@ IOStatus CloudLogControllerImpl::GetFileSize(const std::string& fname,
   if (st.ok()) {
     // map  pathname to cache dir
     std::string pathname = GetCachePath(Slice(fname));
-    Log(InfoLogLevel::DEBUG_LEVEL, cloud_fs_->GetLogger(),
-        "[%s] GetFileSize logfile %s %s", Name(), pathname.c_str(), "ok");
+    Log(InfoLogLevel::DEBUG_LEVEL, cloud_fs_ ? cloud_fs_->GetLogger() : nullptr,
+        "[%s] GetFileSize fname=%s cache=%s status=%s", Name(), fname.c_str(),
+        pathname.c_str(), st.ToString().c_str());
 
     auto lambda = [this, pathname, size]() {
       return cloud_fs_->GetBaseFileSystem()->GetFileSize(pathname, IOOptions(),

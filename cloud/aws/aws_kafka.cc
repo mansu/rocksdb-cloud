@@ -260,6 +260,10 @@ Status KafkaController::PrepareOptions(const ConfigOptions& options) {
   producer_.reset(RdKafka::Producer::create(conf.get(), producer_errstr));
   consumer_.reset(RdKafka::Consumer::create(conf.get(), consumer_errstr));
 
+  Log(InfoLogLevel::DEBUG_LEVEL, cfs->GetLogger(),
+      "[%s] KafkaController create producer=%p consumer=%p", Name(),
+      static_cast<void*>(producer_.get()), static_cast<void*>(consumer_.get()));
+
   Status s;
   if (!producer_) {
     s = Status::InvalidArgument("Failed creating Kafka producer",
