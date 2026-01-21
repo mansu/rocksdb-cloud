@@ -2615,7 +2615,7 @@ list_all_tests:
 
 # Remove the rules for which dependencies should not be generated and see if any are left.
 #If so, include the dependencies; if not, do not include the dependency files
-ROCKS_DEP_RULES=$(filter-out clean format check-format check-buck-targets check-headers check-sources jclean jtest package analyze tags rocksdbjavastatic% unity.% unity_test checkout_folly docker-build, $(MAKECMDGOALS))
+ROCKS_DEP_RULES=$(filter-out clean format check-format check-buck-targets check-headers check-sources jclean jtest package analyze tags rocksdbjavastatic% unity.% unity_test checkout_folly docker-build docker-build-debug, $(MAKECMDGOALS))
 ifneq ("$(ROCKS_DEP_RULES)", "")
 -include $(DEPFILES)
 endif
@@ -2623,4 +2623,18 @@ endif
 # Build the JNI Docker image with a consistent tag
 .PHONY: docker-build
 docker-build:
-	DOCKER_BUILDKIT=1 docker build --build-arg USE_KAFKA=$(USE_KAFKA) -t rocksdb-cloud:latest .
+	DOCKER_BUILDKIT=1 docker build \
+		--build-arg USE_KAFKA=$(USE_KAFKA) \
+		--build-arg DEBUG_LEVEL=$(DEBUG_LEVEL) \
+		--build-arg DEBUG_CFLAGS=$(DEBUG_CFLAGS) \
+		--build-arg DEBUG_CXXFLAGS=$(DEBUG_CXXFLAGS) \
+		-t rocksdb-cloud:latest .
+
+.PHONY: docker-build-debug
+docker-build-debug:
+	DOCKER_BUILDKIT=1 docker build \
+		--build-arg USE_KAFKA=$(USE_KAFKA) \
+		--build-arg DEBUG_LEVEL=1 \
+		--build-arg DEBUG_CFLAGS="-fno-omit-frame-pointer -g" \
+		--build-arg DEBUG_CXXFLAGS="-fno-omit-frame-pointer -g" \
+		-t rocksdb-cloud:latest .
