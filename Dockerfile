@@ -46,6 +46,8 @@ FROM ubuntu:24.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
 ARG USE_KAFKA=0
 ARG DEBUG_LEVEL=0
+ARG DEBUG_CFLAGS=
+ARG DEBUG_CXXFLAGS=
 RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential cmake git pkg-config ccache perl wget ca-certificates curl \
   libbz2-dev zlib1g-dev libzstd-dev liblz4-dev libsnappy-dev libgflags-dev \
@@ -76,6 +78,8 @@ RUN mkdir -p /tmp/ccache-gcc11
 RUN make clean && make jclean
 RUN JAVA_HOME="$(cat /etc/java_home)" USE_AWS=1 USE_RTTI=1 USE_KAFKA=${USE_KAFKA} \
     DEBUG_LEVEL=${DEBUG_LEVEL} \
+    EXTRA_CFLAGS="${DEBUG_CFLAGS}" \
+    EXTRA_CXXFLAGS="${DEBUG_CXXFLAGS}" \
     make -j"$(nproc)" rocksdbjava && \
     cd java && JAVA_HOME="$(cat /etc/java_home)" make sample
 
